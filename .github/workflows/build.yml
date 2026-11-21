@@ -1,0 +1,57 @@
+name: Build Seraph.bin
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Arm toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi make git
+          arm-none-eabi-gcc --version | head -1
+
+      - name: Get libDaisy
+        run: git clone --recursive --depth 1 https://github.com/daisyaudio/libDaisy.git libDaisy
+
+      - name: Build libDaisy
+        run: make -C libDaisy -j"$(nproc)"
+
+      - name: Build Seraph
+        run: make -C SeraphVersio -j"$(nproc)"
+
+      - name: Show result
+        run: |
+          arm-none-eabi-size SeraphVersio/build/Seraph.elf
+          ls -l SeraphVersio/build/Seraph.bin
+          python3 - <<'PY'
+          import struct
+          d = open('SeraphVersio/build/Seraph.bin','rb').read()
+          sp, rst = struct.unpack('<II', d[:8])
+          print('size', len(d), 'stack', hex(sp), 'reset', hex(rst))
+          assert rst >> 24 == 0x08, 'not linked for internal flash'
+          assert len(d) < 128 * 1024, 'too big for internal flash'
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Seraph.bin
+          path: SeraphVersio/build/Seraph.bin
+
+      - name: Publish release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest SeraphVersio/build/Seraph.bin \
+            --title "Seraph.bin (latest build)" \
+            --notes "Built from commit ${GITHUB_SHA}. Flash with https://flash.daisy.audio/ (File Upload tab)."
