@@ -121,6 +121,9 @@ static void Audio(AudioHandle::InputBuffer  in,
     gMeter.OnBlockStart();
 #endif
     hw.ProcessAllControls();
+    // libDaisy's ProcessAllControls() only reads the knobs. The tap button must be debounced here, once per
+    // block, and its edges checked right after, or it never registers.
+    hw.tap.Debounce();
     const uint32_t now = System::GetNow();
 
     // ---- knobs, lightly smoothed against ADC and CV noise ----
