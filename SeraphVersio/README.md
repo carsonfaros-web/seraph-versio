@@ -28,7 +28,7 @@ reverb that can ring for up to about 40 seconds, and slow random swells. The sou
 
 **Switches**
 
-| Switch | Up | Centre | Down |
+| Switch | Left | Centre | Right |
 |---|---|---|---|
 | 1 Voicing | Choir: 4 voices, mostly sine | Drone: 5 voices, mixed | Mass: 6 voices, mostly saw |
 | 2 Mode | Setup page A | Play | Setup page B |
@@ -48,12 +48,12 @@ The tap button does the same in every mode. Setup is now chosen with switch 2, n
 
 ## Setup
 
-Switch 2 picks the mode: centre is Play, up is Setup page A, down is Setup page B. LED 1 pulses orange in Setup, and LED 2 shows the page: orange for A, purple for B.
+Switch 2 picks the mode: centre is Play, left is Setup page A, right is Setup page B. The switches slide left, centre and right. I assumed left is the first label printed beside each switch, which is not confirmed. LED 1 pulses orange in Setup, and LED 2 shows the page: orange for A, purple for B.
 A knob does nothing until it passes the stored value, then it takes over (pick-up), so entering Setup never makes a jump.
 Flip switch 2 back to the centre to return to Play. Values stay until power-off; nothing is saved to flash yet.
 If the module powers up with switch 2 away from the centre, it starts in that Setup page.
 
-| Knob | Page A (switch up) | Page B (switch down) |
+| Knob | Page A (switch left) | Page B (switch right) |
 |---|---|---|
 | 1 | Drift | Air (low noise bed) |
 | 2 | Wow (tape-style tuning drift) | Audio input level |
