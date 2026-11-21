@@ -17,6 +17,7 @@ constexpr int kOsc    = kVoices * kCopies;
 constexpr int kLines  = 8;
 constexpr int kBuf    = 16384; // samples per reverb line (0.34 s at 48 kHz)
 constexpr int kTick   = 64;    // control update interval in samples
+constexpr float kFoldRef = 0.6f; // folder reference level (about the typical oscillator mix peak, set by measurement)
 
 // sin(2*pi*p) for p in [0,1). Parabolic approximation with one refinement step.
 inline float FastSin01(float p)
@@ -67,6 +68,49 @@ struct Params
     float level  = 0.7f;
     float glide  = 4.f;  // seconds, note glide and root glide
     float inLevel = 0.f; // external audio into the filter and reverb
+    float warp   = 0.f;  // 0 off. Cross-modulation between the oscillators: phase mod first, then ring mod
+    float shift  = 0.f;  // -1..1, 0 off. Frequency shifter inside the reverb loop, +-30 Hz
+    float fold   = 0.f;  // 0 off. Soft wave folder ahead of the filter
+};
+
+// Quadrature pair of allpass chains (Niemitalo design): output q leads output i by 90 degrees from about 60 Hz
+// to nearly Nyquist. Used by the frequency shifter.
+struct Hilbert
+{
+    void Reset()
+    {
+        for(int c = 0; c < 2; c++)
+        {
+            dl_[c] = 0.f;
+            for(int s = 0; s < 4; s++)
+                x1_[c][s] = x2_[c][s] = y1_[c][s] = y2_[c][s] = 0.f;
+        }
+    }
+    void Process(float in, float& i, float& q)
+    {
+        static const float k[2][4] = {
+            {0.6923878f * 0.6923878f, 0.9360654322959f * 0.9360654322959f, 0.9882295226860f * 0.9882295226860f, 0.9987488452737f * 0.9987488452737f},
+            {0.4021921162426f * 0.4021921162426f, 0.8561710882420f * 0.8561710882420f, 0.9722909545651f * 0.9722909545651f, 0.9952884791278f * 0.9952884791278f}};
+        float out[2];
+        for(int c = 0; c < 2; c++)
+        {
+            float a = in;
+            for(int s = 0; s < 4; s++)
+            {
+                const float y = k[c][s] * (a + y2_[c][s]) - x2_[c][s];
+                x2_[c][s]     = x1_[c][s];
+                x1_[c][s]     = a;
+                y2_[c][s]     = y1_[c][s];
+                y1_[c][s]     = y;
+                a             = y;
+            }
+            out[c] = a;
+        }
+        i   = dl_[0]; // the first chain is delayed by one sample
+        dl_[0] = out[0];
+        q   = out[1];
+    }
+    float x1_[2][4], x2_[2][4], y1_[2][4], y2_[2][4], dl_[2];
 };
 
 class Engine
@@ -87,6 +131,8 @@ class Engine
         br_[0] = br_[1] = nl_[0] = nl_[1] = 0.f;
         hx_[0] = hx_[1] = hy_[0] = hy_[1] = 0.f;
         bph_[0] = bph_[1] = 0.f;
+        hil_.Reset();
+        shPh_ = shInc_ = shMix_ = 0.f;
         mt_ = mdb_ = mtg_ = 0.f;
         wow_ = wtg_ = wtm_ = fw_ = ftg_ = ftm_ = 0.f;
         tph_ = 0.f;
@@ -181,6 +227,9 @@ class Engine
         P.level   = Cl(P.level, 0.f, 1.f);
         P.glide   = Cl(P.glide, 0.2f, 60.f);
         P.inLevel = Cl(P.inLevel, 0.f, 2.f);
+        P.warp    = Cl(P.warp, 0.f, 1.f);
+        P.shift   = Cl(P.shift, -1.f, 1.f);
+        P.fold    = Cl(P.fold, 0.f, 1.f);
     }
 
     void  SetFrozen(bool f) { frozen_ = f; }
@@ -197,6 +246,11 @@ class Engine
         const float lv   = P.level;
         const float inG  = P.inLevel;
         const float md   = 0.0006f * sr_;
+        // timbre stages, all neutral (and bit-exact to the old sound) when their control is at zero
+        const float pmIdx = (P.warp * 2.f < 1.f ? P.warp * 2.f : 1.f) * 0.5f;
+        const float rmMix = (P.warp * 2.f > 1.f ? P.warp * 2.f - 1.f : 0.f) * 0.6f;
+        const float fold  = P.fold;
+        const float fDrv  = (1.f + 3.f * fold) / kFoldRef;
         for(int k = 0; k < n; k++)
         {
             if(tc_-- <= 0)
@@ -205,6 +259,7 @@ class Engine
                 tc_ = kTick - 1;
             }
             float l = 0.f, r = 0.f;
+            float prev = 0.f; // the previous oscillator modulates the next one
             for(int i = 0; i < kOsc; i++)
             {
                 float p = ph_[i] + inc_[i];
@@ -226,9 +281,22 @@ class Engine
                     float t = (p - 1.f) / dt;
                     saw -= t * t + t + t + 1.f;
                 }
-                const float s = (1.f - T) * FastSin01(p) + T * saw;
+                float       q  = p + pmIdx * prev; // phase modulation of the sine part
+                q -= floorf(q);
+                const float s0 = (1.f - T) * FastSin01(q) + T * saw;
+                const float s  = s0 * (1.f - rmMix) + rmMix * 2.f * s0 * prev; // ring modulation with the oscillator before
+                prev           = s0;
                 l += s * gl;
                 r += s * gr;
+            }
+            if(fold > 0.f)
+            {
+                // soft sine folder: quiet swells stay clean, loud ones fold over
+                float ul = l * fDrv * 0.15915494f, ur = r * fDrv * 0.15915494f;
+                ul -= floorf(ul);
+                ur -= floorf(ur);
+                l = (1.f - fold) * l + fold * 0.8f * kFoldRef * FastSin01(ul);
+                r = (1.f - fold) * r + fold * 0.8f * kFoldRef * FastSin01(ur);
             }
             for(int c = 0; c < 2; c++)
             {
@@ -300,6 +368,27 @@ class Engine
                         v[q]     = aa + bb;
                         v[q + h] = aa - bb;
                     }
+            {
+                // frequency shifter in the loop: crossfade the common (all-lines) part of the feedback with a
+                // shifted copy of itself. The shifter keeps level, so the loop cannot get louder.
+                float vm = 0.f;
+                for(int i = 0; i < kLines; i++)
+                    vm += v[i];
+                vm *= 0.125f;
+                float hi, hq;
+                hil_.Process(vm, hi, hq);
+                if(shMix_ > 0.f)
+                {
+                    shPh_ += shInc_;
+                    shPh_ -= floorf(shPh_);
+                    float cp = shPh_ + 0.25f;
+                    cp -= floorf(cp);
+                    const float sh = hi * FastSin01(cp) + hq * FastSin01(shPh_);
+                    const float dv = shMix_ * (sh - vm);
+                    for(int i = 0; i < kLines; i++)
+                        v[i] += dv;
+                }
+            }
             for(int i = 0; i < kLines; i++)
                 buf_[i][w_] = ((i & 1) ? fr : fl) * 0.5f + v[i] * 0.35355339f;
             w_ = w_ + 1 >= kBuf ? 0 : w_ + 1;
@@ -465,6 +554,11 @@ class Engine
             g_[i] = powf(10.f, -3.f * len_[i] / (RT * sr_));
         }
         noiseG_ = P.noise * 0.03f;
+        // frequency shifter: quadratic taper, +-30 Hz, mix fades in over the first part of the knob
+        const float sx = P.shift;
+        shInc_ = (sx < 0.f ? -1.f : 1.f) * sx * sx * 30.f / sr_;
+        const float ax = fabsf(sx);
+        shMix_ = (ax * 4.f < 1.f ? ax * 4.f : 1.f) * 0.7f;
     }
 
     // ---- state ----
@@ -490,6 +584,8 @@ class Engine
     float     baseMs_[kLines], len_[kLines], lenT_[kLines], g_[kLines], ds_[kLines];
     float     lf_[kLines], lfp_[kLines] = {0}, lr_[kLines];
     float     da_ = 0.2f;
+    Hilbert   hil_;
+    float     shPh_ = 0.f, shInc_ = 0.f, shMix_ = 0.f;
 };
 
 } // namespace seraph

@@ -51,10 +51,10 @@ static int            gRootN = 12;
 static bool           gFirst = true;  // first block: take knob positions as they are
 static float          gFade  = 0.f;   // slow fade-in after power-up
 
-// Setup values, normalised 0..1. Page A then page B, seven each. Page B uses only four.
+// Setup values, normalised 0..1. Page A then page B, seven each.
 static float gSetup[2][7] = {
-    {0.50f, 0.40f, 0.50f, 0.50f, 0.40f, 1.00f, 0.70f}, // drift wow tune size damp width level
-    {0.15f, 0.00f, 0.463f, 0.50f, 0.f, 0.f, 0.f}};    // air input glide body
+    {0.50f, 0.40f, 0.00f, 0.50f, 0.40f, 0.00f, 0.70f},  // A: drift wow WARP SHIFT damp FOLD level
+    {0.15f, 0.00f, 0.463f, 0.50f, 0.50f, 0.50f, 1.00f}}; // B: air input glide body tune size width
 static bool  gCaught[7];
 static float gPrev[7];
 
@@ -83,15 +83,22 @@ static void ApplySetup()
     seraph::Params& P = gEng.P;
     P.drift   = gSetup[0][0];
     P.wow     = gSetup[0][1];
-    P.tune    = (gSetup[0][2] - 0.5f) * 100.f;
-    P.size    = gSetup[0][3];
+    P.warp    = gSetup[0][2];
+    {
+        // Shift: centre is off, with a small dead zone so a CV wobble cannot start it
+        const float x = (gSetup[0][3] - 0.5f) * 2.f, a = fabsf(x);
+        P.shift       = a < 0.04f ? 0.f : (x < 0.f ? -1.f : 1.f) * (a - 0.04f) / 0.96f;
+    }
     P.damp    = gSetup[0][4];
-    P.width   = gSetup[0][5];
+    P.fold    = gSetup[0][5];
     P.level   = gSetup[0][6];
     P.noise   = gSetup[1][0];
     P.inLevel = gSetup[1][1] * 1.2f;
     P.glide   = powf(20.f, gSetup[1][2]); // 1 to 20 seconds
     P.body    = gSetup[1][3];
+    P.tune    = (gSetup[1][4] - 0.5f) * 100.f;
+    P.size    = gSetup[1][5];
+    P.width   = gSetup[1][6];
 }
 
 static void EnterPage(int mode)
@@ -218,7 +225,7 @@ static void Audio(AudioHandle::InputBuffer  in,
     {
         // Setup: a knob only takes over once it passes the stored value (pick-up)
         const int page = gMode == SETUP_A ? 0 : 1;
-        const int used = page == 0 ? 7 : 4;
+        const int used = 7;
         for(int i = 0; i < used; i++)
         {
             const float k = gKnob[i], s = gSetup[page][i];
