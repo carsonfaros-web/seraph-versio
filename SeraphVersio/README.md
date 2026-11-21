@@ -51,6 +51,8 @@ The tap button does the same in every mode. Setup is now chosen with switch 2, n
 Switch 2 picks the mode: centre is Play, left is Setup page A, right is Setup page B. The switches slide left, centre and right. I assumed left is the first label printed beside each switch, which is not confirmed. LED 1 pulses orange in Setup, and LED 2 shows the page: orange for A, purple for B.
 A knob does nothing until it passes the stored value, then it takes over (pick-up), so entering Setup never makes a jump.
 Flip switch 2 back to the centre to return to Play. Values stay until power-off; nothing is saved to flash yet.
+
+**Play settings are held while you are in Setup.** When you return to Play, the knobs are in different places, so the sound does not jump to them. Each Play setting stays at its held value until you move that knob past it (pick-up), the same as in Setup. LED 4 glows dimly white while any Play knob is still waiting to pick up. Sliding switch 2 across the centre from one Setup page to the other does not change the sound either.
 If the module powers up with switch 2 away from the centre, it starts in that Setup page.
 
 | Knob | Page A (switch left) | Page B (switch right) |

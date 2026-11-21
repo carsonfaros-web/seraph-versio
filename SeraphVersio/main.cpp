@@ -47,6 +47,12 @@ enum Mode { PLAY = 0, SETUP_A = 1, SETUP_B = 2 };
 static volatile int   gMode = PLAY;
 static float          gKnob[7]; // smoothed 0..1
 static int            gRootN = 12;
+// Play values. When you come back from Setup the knobs are somewhere else, so the Play settings hold still
+// until each knob is moved past its held value (pick-up), the same way Setup works.
+static float          gPlayVal[7];
+static float          gPlayPrev[7];
+static bool           gPlayCaught[7];
+static volatile bool  gPlayWaiting = false; // true while any Play knob has not picked up yet
 static bool           gFirst = true;  // first block: take knob positions as they are
 static float          gFade  = 0.f;   // slow fade-in after power-up
 
@@ -135,6 +141,12 @@ static void Audio(AudioHandle::InputBuffer  in,
         gFirst = false;
         int n = (int)lroundf(gKnob[0] * 36.f);
         gRootN = n < 0 ? 0 : (n > 36 ? 36 : n);
+        for(int i = 0; i < 7; i++)
+        {
+            gPlayVal[i]    = gKnob[i];
+            gPlayPrev[i]   = gKnob[i];
+            gPlayCaught[i] = true;
+        }
     }
     gFade += (1.f - gFade) * 0.0005f; // about 2 seconds
 
@@ -155,7 +167,14 @@ static void Audio(AudioHandle::InputBuffer  in,
         if(target != gMode)
         {
             if(target == PLAY)
+            {
                 gMode = PLAY;
+                for(int i = 0; i < 7; i++) // hold the Play settings until each knob picks them up again
+                {
+                    gPlayCaught[i] = false;
+                    gPlayPrev[i]   = gKnob[i];
+                }
+            }
             else
                 EnterPage(target); // resets pick-up, so nothing jumps
             gLedFlash = 1.f;
@@ -197,19 +216,32 @@ static void Audio(AudioHandle::InputBuffer  in,
     if(gMode == PLAY)
     {
         // root note: 37 semitones from A#0, with hysteresis so CV noise cannot flutter it
-        const float nf = gKnob[0] * 36.f;
+        bool waiting = false;
+        for(int i = 0; i < 7; i++)
+        {
+            const float k = gKnob[i], v = gPlayVal[i];
+            if(!gPlayCaught[i] && (fabsf(k - v) < 0.03f || (gPlayPrev[i] - v) * (k - v) <= 0.f))
+                gPlayCaught[i] = true;
+            gPlayPrev[i] = k;
+            if(gPlayCaught[i])
+                gPlayVal[i] = k;
+            else
+                waiting = true;
+        }
+        gPlayWaiting = waiting;
+        const float nf = gPlayVal[0] * 36.f;
         if(fabsf(nf - (float)gRootN) > 0.65f)
         {
             int n = (int)lroundf(nf);
             gRootN = n < 0 ? 0 : (n > 36 ? 36 : n);
         }
         P.root   = 22.f + (float)gRootN;
-        P.harm   = gKnob[1];
-        P.clus   = gKnob[2] * 40.f;
-        P.dark   = gKnob[3];
-        P.breath = gKnob[4];
-        P.space  = gKnob[5];
-        P.decay  = gKnob[6];
+        P.harm   = gPlayVal[1];
+        P.clus   = gPlayVal[2] * 40.f;
+        P.dark   = gPlayVal[3];
+        P.breath = gPlayVal[4];
+        P.space  = gPlayVal[5];
+        P.decay  = gPlayVal[6];
     }
     else
     {
@@ -303,6 +335,12 @@ int main(void)
             {
                 r += 0.5f * phase;
                 gr += 0.25f * phase;
+            }
+            if(gPlayWaiting) // a dim white glow while a knob is waiting to pick up its held value
+            {
+                r += 0.12f;
+                gr += 0.12f;
+                b += 0.12f;
             }
 #if SERAPH_CPU_METER
             r = gLedCpu;
