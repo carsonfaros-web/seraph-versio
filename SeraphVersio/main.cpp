@@ -4,10 +4,9 @@
 //
 //   Knobs (7, all take CV):  root note | change | cluster | darkness | breath | space | decay
 //   Switch 1:                voicing   (up choir, centre drone, down mass)
-//   Switch 2:                scale     (up lydian, centre dorian, down minor pentatonic)
+//   Switch 2:                mode      (centre Play, up Setup page A, down Setup page B). Setup knobs use pick-up.
 //   Tap, short:              new seed  (voices glide to a new chord)
-//   Tap, hold 0.8 to 3 s:    freeze or release the harmony
-//   Tap, hold 3 s:           enter or leave Setup (second set of parameters, with pick-up)
+//   Tap, hold 0.8 s or more: freeze or release the harmony
 //   Gate in:                 each rising edge moves one voice to a new note
 //   Audio in:                mixed into the filter and reverb (level set in Setup page B)
 #include "daisy_versio.h"
@@ -51,16 +50,15 @@ static int            gRootN = 12;
 static bool           gFirst = true;  // first block: take knob positions as they are
 static float          gFade  = 0.f;   // slow fade-in after power-up
 
-// Setup values, normalised 0..1. Page A then page B, seven each. Page B uses only four.
+// Setup values, normalised 0..1. Page A then page B, seven each. Page B uses only five.
 static float gSetup[2][7] = {
     {0.50f, 0.40f, 0.50f, 0.50f, 0.40f, 1.00f, 0.70f}, // drift wow tune size damp width level
-    {0.15f, 0.00f, 0.463f, 0.50f, 0.f, 0.f, 0.f}};    // air input glide body
+    {0.15f, 0.00f, 0.463f, 0.50f, 0.50f, 0.f, 0.f}};  // air input glide body scale
 static bool  gCaught[7];
 static float gPrev[7];
 
 // Tap button
 static bool     gTapDown   = false;
-static bool     gLongFired = false;
 static uint32_t gTapStart  = 0;
 static uint32_t gSeedCtr   = 1;
 
@@ -92,6 +90,11 @@ static void ApplySetup()
     P.inLevel = gSetup[1][1] * 1.2f;
     P.glide   = powf(20.f, gSetup[1][2]); // 1 to 20 seconds
     P.body    = gSetup[1][3];
+    // scale: left third minor pentatonic, middle third dorian, right third lydian
+    {
+        const int sc = (int)(gSetup[1][4] * 3.f);
+        P.scale      = sc < 0 ? 0 : (sc > 2 ? 2 : sc);
+    }
 }
 
 static void EnterPage(int mode)
@@ -139,51 +142,45 @@ static void Audio(AudioHandle::InputBuffer  in,
 
     // ---- switches ----
     const int voicing = SwPos(hw.sw[DaisyVersio::SW_0]);
-    const int scalePos = SwPos(hw.sw[DaisyVersio::SW_1]);
     gVoicing = voicing;
     static const float kTimbre[3] = {0.25f, 0.60f, 0.85f}; // choir, drone, mass
     static const int   kDens[3]   = {4, 5, 6};
-    static const int   kScale[3]  = {2, 1, 0};             // lydian, dorian, minor pentatonic
     P.timbre = kTimbre[voicing];
     P.dens   = kDens[voicing];
-    P.scale  = kScale[scalePos];
 
-    // ---- tap button: short = new seed, 0.8 to 3 s = freeze, 3 s = Setup ----
+    // ---- switch 2 picks the mode: centre Play, up Setup A, down Setup B ----
+    {
+        const int sp     = SwPos(hw.sw[DaisyVersio::SW_1]);
+        const int target = sp == 1 ? PLAY : (sp == 0 ? SETUP_A : SETUP_B);
+        if(target != gMode)
+        {
+            if(target == PLAY)
+                gMode = PLAY;
+            else
+                EnterPage(target); // resets pick-up, so nothing jumps
+            gLedFlash = 1.f;
+        }
+    }
+
+    // ---- tap button, same in every mode: short = new seed, hold 0.8 s or more = freeze ----
     if(hw.tap.RisingEdge())
     {
-        gTapDown   = true;
-        gLongFired = false;
-        gTapStart  = now;
-    }
-    if(gTapDown && !gLongFired && now - gTapStart >= 3000)
-    {
-        gLongFired = true;
-        if(gMode == PLAY)
-            EnterPage(SETUP_A);
-        else
-            gMode = PLAY;
-        gLedFlash = 1.f;
+        gTapDown  = true;
+        gTapStart = now;
     }
     if(hw.tap.FallingEdge() && gTapDown)
     {
-        gTapDown = false;
-        if(!gLongFired)
+        gTapDown            = false;
+        const uint32_t held = now - gTapStart;
+        if(held >= 800)
         {
-            const uint32_t held = now - gTapStart;
-            if(gMode != PLAY)
-            {
-                EnterPage(gMode == SETUP_A ? SETUP_B : SETUP_A); // short tap flips the Setup page
-            }
-            else if(held >= 800)
-            {
-                gEng.SetFrozen(!gEng.Frozen());
-            }
-            else
-            {
-                gSeedCtr = gSeedCtr * 1664525u + 1013904223u + now;
-                gEng.Reseed(gSeedCtr, false);
-                gLedFlash = 1.f;
-            }
+            gEng.SetFrozen(!gEng.Frozen());
+        }
+        else
+        {
+            gSeedCtr = gSeedCtr * 1664525u + 1013904223u + now;
+            gEng.Reseed(gSeedCtr, false);
+            gLedFlash = 1.f;
         }
     }
 
@@ -218,7 +215,7 @@ static void Audio(AudioHandle::InputBuffer  in,
     {
         // Setup: a knob only takes over once it passes the stored value (pick-up)
         const int page = gMode == SETUP_A ? 0 : 1;
-        const int used = page == 0 ? 7 : 4;
+        const int used = page == 0 ? 7 : 5;
         for(int i = 0; i < used; i++)
         {
             const float k = gKnob[i], s = gSetup[page][i];

@@ -31,15 +31,16 @@ reverb that can ring for up to about 40 seconds, and slow random swells. The sou
 | Switch | Up | Centre | Down |
 |---|---|---|---|
 | 1 Voicing | Choir: 4 voices, mostly sine | Drone: 5 voices, mixed | Mass: 6 voices, mostly saw |
-| 2 Scale | Lydian | Dorian | Minor pentatonic |
+| 2 Mode | Setup page A | Play | Setup page B |
 
 **Tap button**
 
 | Press | Does |
 |---|---|
 | Short | New seed. The voices glide to a new chord. |
-| Hold 0.8 to 3 s | Freeze the harmony, or release it. Swells, drift and reverb keep moving. |
-| Hold 3 s | Enter or leave Setup. |
+| Hold 0.8 s or more | Freeze the harmony, or release it. Swells, drift and reverb keep moving. |
+
+The tap button does the same in every mode. Setup is now chosen with switch 2, not the button.
 
 **Gate input.** Each rising edge moves one voice to a new note, so a clock or sequencer can drive the harmony.
 
@@ -47,19 +48,22 @@ reverb that can ring for up to about 40 seconds, and slow random swells. The sou
 
 ## Setup
 
-Hold the tap button for 3 seconds. LED 1 pulses orange, and LED 2 shows the page: orange for page A, purple for page B. A short tap flips between them.
+Switch 2 picks the mode: centre is Play, up is Setup page A, down is Setup page B. LED 1 pulses orange in Setup, and LED 2 shows the page: orange for A, purple for B.
 A knob does nothing until it passes the stored value, then it takes over (pick-up), so entering Setup never makes a jump.
-Hold 3 seconds again to leave. Values stay until power-off; nothing is saved to flash yet.
+Flip switch 2 back to the centre to return to Play. Values stay until power-off; nothing is saved to flash yet.
+If the module powers up with switch 2 away from the centre, it starts in that Setup page.
 
-| Knob | Page A | Page B |
+| Knob | Page A (switch up) | Page B (switch down) |
 |---|---|---|
 | 1 | Drift | Air (low noise bed) |
 | 2 | Wow (tape-style tuning drift) | Audio input level |
 | 3 | Tune, ±50 cents | Glide time, 1 to 20 s |
 | 4 | Reverb size | Sub body |
-| 5 | Damping | not used |
+| 5 | Damping | Scale: left third minor pentatonic, middle Dorian, right third Lydian |
 | 6 | Width | not used |
 | 7 | Output level | not used |
+
+The scale used to be on switch 2. It moved to Setup B knob 5 so the switch could become the mode switch. It keeps its value in Play.
 
 ## LEDs
 
