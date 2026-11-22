@@ -1,21 +1,22 @@
 // Seraph for Noise Engineering Versio.
 //
-// A slow, dark, wide drone and pad engine. See README.md for the control map.
+// A drone and pad engine whose notes work like the Sdkc Instruments Helical: each voice plays a note, and when
+// it ends the next pitch comes from the length of the last note, and the next length from the new pitch.
+// One flat panel, no setup pages, no hidden values: every knob is live all the time. See README.md.
 //
-//   Knobs (7, all take CV):  root note | change | cluster | darkness | breath | space | decay
-//   Switch 1:                voicing   (up choir, centre drone, down mass)
-//   Switch 2:                mode      (centre Play, up Setup page A, down Setup page B). Setup knobs use pick-up.
-//   Tap, short:              new seed  (voices glide to a new chord)
-//   Tap, hold 0.8 s or more: freeze or release the harmony
-//   Gate in:                 each rising edge moves one voice to a new note
-//   Audio in:                mixed into the filter and reverb (level set in Setup page B)
+//   Knobs (7, all take CV):  1 Root | 2 Scale | 3 Voices | 4 Rate | 5 Glide | 6 Spread | 7 Wave
+//   Switch 1:                Env    (left soft swell, centre even, right pluck)
+//   Switch 2:                Space  (left room, centre hall, right vast)
+//   Tap, short:              new seed (every voice starts a new note, new pattern)
+//   Tap, hold 0.8 s or more: Lock on or off (notes and lengths repeat, scale and spread still work)
+//   Gate in (Tap jack):      each rising edge starts the next voice's note, so a clock can play it
 #include "daisy_versio.h"
 #include "seraph.h"
 #include <cmath>
 
 using namespace daisy;
 
-// ---- set to 1 to show CPU load on LED 3 while you test (needs libDaisy CpuLoadMeter) ----
+// ---- set to 1 to show CPU load on LED 4 while you test (needs libDaisy CpuLoadMeter) ----
 #define SERAPH_CPU_METER 0
 #if SERAPH_CPU_METER
 #include "util/CpuLoadMeter.h"
@@ -31,7 +32,7 @@ static float DSY_SDRAM_BSS gBuf[seraph::kLines][seraph::kBuf];
 static const float kOutTrim = 0.5f; // about -6 dB. Raise toward 1.0 if too quiet; the output is limited to full scale either way
 
 // ---- the one place that reads a three-way switch. If your libDaisy names the positions
-//      differently, this is the only function to change. Returns 0 up, 1 centre, 2 down. ----
+//      differently, this is the only function to change. Returns 0 up/left, 1 centre, 2 down/right. ----
 static int SwPos(Switch3& s)
 {
     int p = s.Read();
@@ -43,30 +44,22 @@ static int SwPos(Switch3& s)
 }
 
 // ---- control state ----
-enum Mode { PLAY = 0, SETUP_A = 1, SETUP_B = 2 };
-static volatile int   gMode = PLAY;
-static float          gKnob[7]; // smoothed 0..1
-static int            gRootN = 12;
-// Play values. When you come back from Setup the knobs are somewhere else, so the Play settings hold still
-// until each knob is moved past its held value (pick-up), the same way Setup works.
-static float          gPlayVal[7];
-static float          gPlayPrev[7];
-static bool           gPlayCaught[7];
-static volatile bool  gPlayWaiting = false; // true while any Play knob has not picked up yet
-static bool           gFirst = true;  // first block: take knob positions as they are
-static float          gFade  = 0.f;   // slow fade-in after power-up
+static float gKnob[7];           // smoothed 0..1
+static int   gRootN  = 12;       // root, 0..36 semitones above A#0
+static int   gScaleI = 4;        // scale, 0..7
+static int   gVoices = 5;        // voices, 1..6
+static bool  gFirst  = true;     // first block: take knob positions as they are
+static float gFade   = 0.f;      // slow fade-in after power-up
 
-// Setup values, normalised 0..1. Page A then page B, seven each. Page B uses only five.
-static float gSetup[2][7] = {
-    {0.50f, 0.40f, 0.50f, 0.50f, 0.40f, 1.00f, 0.70f}, // drift wow tune size damp width level
-    {0.15f, 0.00f, 0.463f, 0.50f, 0.50f, 0.f, 0.f}};  // air input glide body scale
-static bool  gCaught[7];
-static float gPrev[7];
+// Switch settings: Space is reverb amount, decay and size together
+static const float kSpace[3] = {0.35f, 0.62f, 0.80f};
+static const float kDecay[3] = {0.25f, 0.55f, 0.90f}; // about 4 s, 10 s, 30 s
+static const float kSize[3]  = {0.35f, 0.50f, 0.75f};
 
 // Tap button
-static bool     gTapDown   = false;
-static uint32_t gTapStart  = 0;
-static uint32_t gSeedCtr   = 1;
+static bool     gTapDown  = false;
+static uint32_t gTapStart = 0;
+static uint32_t gSeedCtr  = 1;
 
 // Gate
 static bool gGatePrev = false;
@@ -76,41 +69,21 @@ static volatile float gLedPeak   = 0.f;
 static volatile float gLedFlash  = 0.f; // seed flash, decays
 static volatile float gLedGate   = 0.f;
 static volatile bool  gLedFrozen = false;
-static volatile int   gVoicing   = 1;
-static volatile float gLedSwell  = 0.f;
+static volatile int   gLedScale  = 4;
+static volatile float gLedAct    = 0.f;
 #if SERAPH_CPU_METER
 static volatile float gLedCpu = 0.f;
 #endif
 
-static void ApplySetup()
+// Moves a stepped value to a new step only once the knob is well inside it, so noise on the knob or CV
+// sitting on a step edge cannot make it flutter. pos is the knob 0..1, n the number of steps.
+static int Step(float pos, int n, int cur)
 {
-    seraph::Params& P = gEng.P;
-    P.drift   = gSetup[0][0];
-    P.wow     = gSetup[0][1];
-    P.tune    = (gSetup[0][2] - 0.5f) * 100.f;
-    P.size    = gSetup[0][3];
-    P.damp    = gSetup[0][4];
-    P.width   = gSetup[0][5];
-    P.level   = gSetup[0][6];
-    P.noise   = gSetup[1][0];
-    P.inLevel = gSetup[1][1] * 1.2f;
-    P.glide   = powf(20.f, gSetup[1][2]); // 1 to 20 seconds
-    P.body    = gSetup[1][3];
-    // scale: left third minor pentatonic, middle third dorian, right third lydian
-    {
-        const int sc = (int)(gSetup[1][4] * 3.f);
-        P.scale      = sc < 0 ? 0 : (sc > 2 ? 2 : sc);
-    }
-}
-
-static void EnterPage(int mode)
-{
-    gMode = mode;
-    for(int i = 0; i < 7; i++)
-    {
-        gCaught[i] = false;
-        gPrev[i]   = gKnob[i];
-    }
+    const float f = pos * (float)n;
+    if(f > (float)cur - 0.12f && f < (float)(cur + 1) + 0.12f)
+        return cur;
+    int i = (int)f;
+    return i < 0 ? 0 : (i > n - 1 ? n - 1 : i);
 }
 
 static void Audio(AudioHandle::InputBuffer  in,
@@ -126,7 +99,7 @@ static void Audio(AudioHandle::InputBuffer  in,
     hw.tap.Debounce();
     const uint32_t now = System::GetNow();
 
-    // ---- knobs, lightly smoothed against ADC and CV noise ----
+    // ---- knobs, lightly smoothed against ADC and CV noise (about 10 ms) ----
     for(int i = 0; i < 7; i++)
     {
         float k = hw.GetKnobValue(i);
@@ -142,49 +115,26 @@ static void Audio(AudioHandle::InputBuffer  in,
     if(gFirst)
     {
         gFirst = false;
-        int n = (int)lroundf(gKnob[0] * 36.f);
+        int n  = (int)lroundf(gKnob[0] * 36.f);
         gRootN = n < 0 ? 0 : (n > 36 ? 36 : n);
-        for(int i = 0; i < 7; i++)
-        {
-            gPlayVal[i]    = gKnob[i];
-            gPlayPrev[i]   = gKnob[i];
-            gPlayCaught[i] = true;
-        }
+        int sc = (int)(gKnob[1] * 8.f);
+        gScaleI = sc < 0 ? 0 : (sc > 7 ? 7 : sc);
+        int vc  = (int)(gKnob[2] * 6.f);
+        gVoices = (vc < 0 ? 0 : (vc > 5 ? 5 : vc)) + 1;
     }
     gFade += (1.f - gFade) * 0.0005f; // about 2 seconds
 
     seraph::Params& P = gEng.P;
 
     // ---- switches ----
-    const int voicing = SwPos(hw.sw[DaisyVersio::SW_0]);
-    gVoicing = voicing;
-    static const float kTimbre[3] = {0.25f, 0.60f, 0.85f}; // choir, drone, mass
-    static const int   kDens[3]   = {4, 5, 6};
-    P.timbre = kTimbre[voicing];
-    P.dens   = kDens[voicing];
+    const int envPos   = SwPos(hw.sw[DaisyVersio::SW_0]); // 0 soft, 1 even, 2 pluck
+    const int spacePos = SwPos(hw.sw[DaisyVersio::SW_1]); // 0 room, 1 hall, 2 vast
+    P.env   = envPos;
+    P.space = kSpace[spacePos];
+    P.decay = kDecay[spacePos];
+    P.size  = kSize[spacePos];
 
-    // ---- switch 2 picks the mode: centre Play, up Setup A, down Setup B ----
-    {
-        const int sp     = SwPos(hw.sw[DaisyVersio::SW_1]);
-        const int target = sp == 1 ? PLAY : (sp == 0 ? SETUP_A : SETUP_B);
-        if(target != gMode)
-        {
-            if(target == PLAY)
-            {
-                gMode = PLAY;
-                for(int i = 0; i < 7; i++) // hold the Play settings until each knob picks them up again
-                {
-                    gPlayCaught[i] = false;
-                    gPlayPrev[i]   = gKnob[i];
-                }
-            }
-            else
-                EnterPage(target); // resets pick-up, so nothing jumps
-            gLedFlash = 1.f;
-        }
-    }
-
-    // ---- tap button, same in every mode: short = new seed, hold 0.8 s or more = freeze ----
+    // ---- tap button: short = new seed, hold 0.8 s or more = Lock ----
     if(hw.tap.RisingEdge())
     {
         gTapDown  = true;
@@ -206,7 +156,7 @@ static void Audio(AudioHandle::InputBuffer  in,
         }
     }
 
-    // ---- gate: each rising edge moves one voice ----
+    // ---- gate: each rising edge starts the next voice's note ----
     const bool g = hw.Gate();
     if(g && !gGatePrev)
     {
@@ -215,53 +165,56 @@ static void Audio(AudioHandle::InputBuffer  in,
     }
     gGatePrev = g;
 
-    // ---- knob mapping ----
-    if(gMode == PLAY)
+    // ---- knobs. Every knob is live, there is nothing to pick up. ----
     {
-        // root note: 37 semitones from A#0, with hysteresis so CV noise cannot flutter it
-        bool waiting = false;
-        for(int i = 0; i < 7; i++)
-        {
-            const float k = gKnob[i], v = gPlayVal[i];
-            if(!gPlayCaught[i] && (fabsf(k - v) < 0.03f || (gPlayPrev[i] - v) * (k - v) <= 0.f))
-                gPlayCaught[i] = true;
-            gPlayPrev[i] = k;
-            if(gPlayCaught[i])
-                gPlayVal[i] = k;
-            else
-                waiting = true;
-        }
-        gPlayWaiting = waiting;
-        const float nf = gPlayVal[0] * 36.f;
+        // 1 Root: 37 semitones from A#0 (29 Hz) to A#3, with hysteresis so CV noise cannot flutter it
+        const float nf = gKnob[0] * 36.f;
         if(fabsf(nf - (float)gRootN) > 0.65f)
         {
-            int n = (int)lroundf(nf);
+            int n  = (int)lroundf(nf);
             gRootN = n < 0 ? 0 : (n > 36 ? 36 : n);
         }
-        P.root   = 22.f + (float)gRootN;
-        P.harm   = gPlayVal[1];
-        P.clus   = gPlayVal[2] * 40.f;
-        P.dark   = gPlayVal[3];
-        P.breath = gPlayVal[4];
-        P.space  = gPlayVal[5];
-        P.decay  = gPlayVal[6];
-    }
-    else
-    {
-        // Setup: a knob only takes over once it passes the stored value (pick-up)
-        const int page = gMode == SETUP_A ? 0 : 1;
-        const int used = page == 0 ? 7 : 5;
-        for(int i = 0; i < used; i++)
+        P.root = 22.f + (float)gRootN;
+        // 2 Scale: eight scales, dark on the left to bright on the right
+        gScaleI = Step(gKnob[1], 8, gScaleI);
+        P.scale = gScaleI;
+        // 3 Voices: one to six
+        gVoices = Step(gKnob[2], 6, gVoices - 1) + 1;
+        P.dens  = gVoices;
+        // 4 Rate: note length at the root, 0.12 s to 48 s (higher notes are longer)
+        P.rate = 0.12f * powf(400.f, gKnob[3]);
+        // 5 Glide: 0.01 s to 12 s
+        P.glide = 0.01f * powf(1200.f, gKnob[4]);
+        // 6 Spread: pitch range above the root, root only to three octaves
+        P.spread = gKnob[5];
+        // 7 Wave: sine to saw, and the filter opens with it
+        P.timbre = 0.9f * gKnob[6];
+        P.dark   = 0.35f + 0.5f * gKnob[6];
         {
-            const float k = gKnob[i], s = gSetup[page][i];
-            if(!gCaught[i] && (fabsf(k - s) < 0.03f || (gPrev[i] - s) * (k - s) <= 0.f))
-                gCaught[i] = true;
-            gPrev[i] = k;
-            if(gCaught[i])
-                gSetup[page][i] = k;
+            // level trim measured across the Wave knob, so sine, mixed and saw sound equally loud
+            static const float kWaveTrim[9] = {0.45f, 0.50f, 0.59f, 0.76f, 1.06f, 1.42f, 1.16f, 0.79f, 0.57f};
+            const float        f            = gKnob[6] * 8.f;
+            int                i            = (int)f;
+            if(i > 7)
+                i = 7;
+            if(i < 0)
+                i = 0;
+            const float fr = f - (float)i;
+            P.gain         = kWaveTrim[i] + (kWaveTrim[i + 1] - kWaveTrim[i]) * fr;
         }
-        ApplySetup();
     }
+    // fixed to the settings measured from the album
+    P.clus   = 16.f;
+    P.drift  = 0.5f;
+    P.breath = 0.1f;
+    P.body   = 0.5f;
+    P.damp   = 0.4f;
+    P.wow    = 0.4f;
+    P.tune   = 0.f;
+    P.noise  = 0.15f;
+    P.width  = 1.f;
+    P.level  = 0.7f;
+    P.inLevel = 0.f;
 
     // ---- audio ----
     float inL[256], inR[256], oL[256], oR[256];
@@ -288,8 +241,8 @@ static void Audio(AudioHandle::InputBuffer  in,
     }
     gLedPeak   = gLedPeak * 0.92f > peak ? gLedPeak * 0.92f : peak;
     gLedFrozen = gEng.Frozen();
-    float sw   = (gEng.MasterDb() + 22.f) / 22.f;
-    gLedSwell  = sw < 0.f ? 0.f : (sw > 1.f ? 1.f : sw);
+    gLedScale  = gScaleI;
+    gLedAct    = gEng.Activity();
 #if SERAPH_CPU_METER
     gMeter.OnBlockEnd();
     gLedCpu = gMeter.GetAvgCpuLoad();
@@ -303,66 +256,45 @@ int main(void)
     gEng.Init(sr, gBuf, 1u);
     for(int i = 0; i < 7; i++)
         gKnob[i] = 0.f;
-    ApplySetup();
 #if SERAPH_CPU_METER
     gMeter.Init(sr, hw.AudioBlockSize());
 #endif
     hw.StartAdc();
     hw.StartAudio(Audio);
 
+    // LED 3 shows the scale, one colour per scale from dark (left) to bright (right)
+    static const float kScaleCol[8][3] = {{0.30f, 0.00f, 0.10f}, {0.40f, 0.00f, 0.30f}, {0.20f, 0.04f, 0.45f},
+                                          {0.04f, 0.10f, 0.45f}, {0.00f, 0.30f, 0.40f}, {0.05f, 0.40f, 0.12f},
+                                          {0.40f, 0.35f, 0.04f}, {0.45f, 0.38f, 0.30f}};
+
     uint32_t t = 0;
     while(1)
     {
         hw.DelayMs(6);
         t += 6;
-        const float phase  = 0.5f + 0.5f * sinf((float)t * 0.0031f);
-        const float phaseF = 0.5f + 0.5f * sinf((float)t * 0.0090f);
+        const float phase = 0.5f + 0.5f * sinf((float)t * 0.0031f);
         gLedFlash *= 0.93f;
         gLedGate *= 0.90f;
-        if(gMode == PLAY)
+        // LED 1 output level, LED 2 note activity, LED 3 scale colour, LED 4 events
+        const float p = gLedPeak;
+        hw.SetLed(DaisyVersio::LED_0, p * 0.6f, p * 0.7f, 0.15f + 0.85f * p);
+        const float a = gLedAct;
+        hw.SetLed(DaisyVersio::LED_1, 0.f, 0.04f + 0.55f * a, 0.04f + 0.50f * a);
+        const int sc = gLedScale < 0 ? 0 : (gLedScale > 7 ? 7 : gLedScale);
+        hw.SetLed(DaisyVersio::LED_2, kScaleCol[sc][0], kScaleCol[sc][1], kScaleCol[sc][2]);
+        float r = gLedFlash, gr = gLedFlash, b = gLedFlash; // white flash on a new seed
+        gr += gLedGate * 0.8f;                              // green flash on a gate
+        if(gLedFrozen)                                      // slow amber pulse while Locked
         {
-            // LED 0 output level, LED 1 swell, LED 2 voicing colour, LED 3 events
-            const float p = gLedPeak;
-            hw.SetLed(DaisyVersio::LED_0, p * 0.6f, p * 0.7f, 0.15f + 0.85f * p);
-            const float s = gLedSwell;
-            hw.SetLed(DaisyVersio::LED_1, 0.f, 0.05f + 0.5f * s, 0.05f + 0.45f * s);
-            switch(gVoicing)
-            {
-                case 0: hw.SetLed(DaisyVersio::LED_2, 0.15f, 0.30f, 0.35f); break; // choir
-                case 1: hw.SetLed(DaisyVersio::LED_2, 0.25f, 0.10f, 0.40f); break; // drone
-                default: hw.SetLed(DaisyVersio::LED_2, 0.45f, 0.05f, 0.25f); break; // mass
-            }
-            float r = gLedFlash, gr = gLedFlash, b = gLedFlash;
-            gr += gLedGate * 0.8f;
-            if(gLedFrozen)
-            {
-                r += 0.5f * phase;
-                gr += 0.25f * phase;
-            }
-            if(gPlayWaiting) // a dim white glow while a knob is waiting to pick up its held value
-            {
-                r += 0.12f;
-                gr += 0.12f;
-                b += 0.12f;
-            }
+            r += 0.5f * phase;
+            gr += 0.25f * phase;
+        }
 #if SERAPH_CPU_METER
-            r = gLedCpu;
-            gr = 1.f - gLedCpu;
-            b  = 0.f;
+        r  = gLedCpu;
+        gr = 1.f - gLedCpu;
+        b  = 0.f;
 #endif
-            hw.SetLed(DaisyVersio::LED_3, r > 1.f ? 1.f : r, gr > 1.f ? 1.f : gr, b > 1.f ? 1.f : b);
-        }
-        else
-        {
-            // Setup: orange pulse on LED 0, page colour on LED 1, flash on LED 3 when leaving/entering
-            hw.SetLed(DaisyVersio::LED_0, 0.8f * phaseF, 0.3f * phaseF, 0.f);
-            if(gMode == SETUP_A)
-                hw.SetLed(DaisyVersio::LED_1, 0.7f, 0.25f, 0.f);
-            else
-                hw.SetLed(DaisyVersio::LED_1, 0.6f, 0.f, 0.5f);
-            hw.SetLed(DaisyVersio::LED_2, 0.f, 0.f, 0.f);
-            hw.SetLed(DaisyVersio::LED_3, gLedFlash, gLedFlash, gLedFlash);
-        }
+        hw.SetLed(DaisyVersio::LED_3, r > 1.f ? 1.f : r, gr > 1.f ? 1.f : gr, b > 1.f ? 1.f : b);
         hw.UpdateLeds();
     }
 }

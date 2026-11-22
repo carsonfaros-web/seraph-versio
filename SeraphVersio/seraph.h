@@ -2,8 +2,11 @@
 // Header-only, no libDaisy dependency, so it can also be built and tested on a computer.
 //
 // Six voices, each a cluster of four slightly detuned copies, drifting in pitch and level.
-// Dark 24 dB low-pass, sub sine, eight-line feedback reverb. Slow random swells and
-// slow harmony changes. Measured against the album "Seraphim" (see README).
+// Dark 24 dB low-pass, sub sine, eight-line feedback reverb. Measured against the album "Seraphim" (see README).
+//
+// Notes work like the Sdkc Instruments Helical: every voice plays a note, and when it ends the next pitch
+// is worked out from the length of the last note, and the next length from the new pitch (higher notes last
+// longer). The same seed always gives the same pattern. Rate sets how long notes are; Lock repeats them.
 #pragma once
 #include <cmath>
 #include <cstdint>
@@ -47,13 +50,15 @@ inline float Cl(float x, float lo, float hi)
 struct Params
 {
     float root   = 34.f; // MIDI note of the root (34 = A#1)
-    int   scale  = 1;    // 0 minor pentatonic, 1 dorian, 2 lydian, 3 open fifths
+    int   scale  = 4;    // 0..7, dark to bright: open fifths, minor pent, hirajoshi, phrygian, dorian, major pent, lydian, whole tone
     int   dens   = 5;    // active voices, 1..6
     float clus   = 16.f; // cluster spread, cents
     float drift  = 0.5f;
     float timbre = 0.6f; // 0 sine .. 1 saw
-    float breath = 0.6f;
-    float harm   = 0.4f; // how often voices change note
+    float breath = 0.1f; // depth of the slow random level wander
+    float rate   = 2.4f; // seconds per note at the root; the higher the pitch, the longer the note (up to 2.8x)
+    float spread = 1.f;  // pitch range above the root: 0 = root only, 1 = three octaves
+    int   env    = 0;    // note shape: 0 soft swell, 1 even, 2 pluck
     float dark   = 0.46f;
     float body   = 0.5f;
     float space  = 0.65f;
@@ -65,8 +70,9 @@ struct Params
     float noise  = 0.15f;
     float width  = 1.f;
     float level  = 0.7f;
-    float glide  = 4.f;  // seconds, note glide and root glide
+    float glide  = 0.35f; // seconds, note glide (root glide is capped at 2 s)
     float inLevel = 0.f; // external audio into the filter and reverb
+    float gain   = 1.f;  // voice level trim, so the Wave knob does not change the loudness
 };
 
 class Engine
@@ -88,6 +94,12 @@ class Engine
         hx_[0] = hx_[1] = hy_[0] = hy_[1] = 0.f;
         bph_[0] = bph_[1] = 0.f;
         mt_ = mdb_ = mtg_ = 0.f;
+        act_ = 0.f;
+        rr_  = 0;
+        sig_ = -1;
+        wetS_ = P.space * 1.1f;
+        dryS_ = 1.f - 0.5f * P.space;
+        memset(envS_, 0, sizeof(envS_));
         wow_ = wtg_ = wtm_ = fw_ = ftg_ = ftm_ = 0.f;
         tph_ = 0.f;
         tc_  = 0;
@@ -101,12 +113,10 @@ class Engine
             len_[i]    = baseMs_[i] * 0.001f * sr_;
         }
         const int lo[kVoices] = {0, 0, 7, 12, 12, 19};
-        const int hi[kVoices] = {7, 14, 19, 24, 27, 28};
         const float vg[kVoices] = {0.85f, 1.f, 0.85f, 0.7f, 0.6f, 0.5f};
         for(int s = 0; s < kVoices; s++)
         {
             lo_[s] = lo[s];
-            hi_[s] = hi[s];
             vg_[s] = vg[s];
         }
         rootS_ = P.root;
@@ -116,7 +126,7 @@ class Engine
             len_[i] = lenT_[i];
     }
 
-    // New random harmony. immediate = true snaps to it, false glides there.
+    // New seed: every voice starts a new note now. immediate = true snaps to it, false glides there.
     void Reseed(uint32_t seed, bool immediate)
     {
         rs_ = seed * 2654435761u + 12345u;
@@ -132,13 +142,15 @@ class Engine
         }
         for(int s = 0; s < kVoices; s++)
         {
-            Pick(s);
+            y_[s]   = Rnd();
+            dm0_[s] = 1.f;
+            StartNote(s, true);
             if(immediate)
             {
                 semi_[s] = stgt_[s];
                 gate_[s] = s < P.dens ? 1.f : 0.f;
+                xph_[s]  = Rnd() * 0.9f; // spread the voices through their notes
             }
-            stm_[s] = Rnd() * 20.f;
             atm_[s] = Rnd() * 5.f;
             atg_[s] = -Rnd() * 6.f;
             if(immediate)
@@ -146,28 +158,27 @@ class Engine
         }
     }
 
-    // One random active voice moves to a new note now (use for a clock or gate).
+    // A clock or gate: the next voice in turn starts a new note now (unless Lock is on, then it just repeats).
     void Advance()
     {
-        int n = P.dens < 1 ? 1 : (P.dens > kVoices ? kVoices : P.dens);
-        int s = (int)(Rnd() * n);
-        if(s >= n)
-            s = n - 1;
-        Pick(s);
-        stm_[s] = (120.f - 105.f * P.harm) * (0.5f + Rnd());
+        const int n = P.dens < 1 ? 1 : (P.dens > kVoices ? kVoices : P.dens);
+        rr_         = (rr_ + 1) % n;
+        StartNote(rr_, false);
     }
 
     // Forces every parameter into its valid range, so no input can make the engine unstable.
     void Sanitize()
     {
         P.root    = Cl(P.root, 0.f, 127.f);
-        P.scale   = (int)Cl((float)P.scale, 0.f, 3.f);
+        P.scale   = (int)Cl((float)P.scale, 0.f, 7.f);
         P.dens    = (int)Cl((float)P.dens, 1.f, (float)kVoices);
         P.clus    = Cl(P.clus, 0.f, 60.f);
         P.drift   = Cl(P.drift, 0.f, 1.f);
         P.timbre  = Cl(P.timbre, 0.f, 1.f);
         P.breath  = Cl(P.breath, 0.f, 1.f);
-        P.harm    = Cl(P.harm, 0.f, 1.f);
+        P.rate    = Cl(P.rate, 0.05f, 120.f);
+        P.spread  = Cl(P.spread, 0.f, 1.f);
+        P.env     = (int)Cl((float)P.env, 0.f, 2.f);
         P.dark    = Cl(P.dark, 0.f, 1.f);
         P.body    = Cl(P.body, 0.f, 1.f);
         P.space   = Cl(P.space, 0.f, 1.f);
@@ -179,21 +190,23 @@ class Engine
         P.noise   = Cl(P.noise, 0.f, 1.f);
         P.width   = Cl(P.width, 0.f, 1.f);
         P.level   = Cl(P.level, 0.f, 1.f);
-        P.glide   = Cl(P.glide, 0.2f, 60.f);
+        P.glide   = Cl(P.glide, 0.005f, 60.f);
         P.inLevel = Cl(P.inLevel, 0.f, 2.f);
+        P.gain    = Cl(P.gain, 0.f, 2.f);
     }
 
     void  SetFrozen(bool f) { frozen_ = f; }
     bool  Frozen() const { return frozen_; }
     float MasterDb() const { return mdb_; }
     float Wander() const { return fw_; }
+    float Activity() const { return act_; } // average note envelope of the active voices, 0..1
 
     void Render(const float* inL, const float* inR, float* outL, float* outR, int n)
     {
         Sanitize();
         const float T    = P.timbre;
-        const float wet  = P.space * 1.1f;
-        const float dry  = 1.f - 0.5f * P.space;
+        const float wetT = P.space * 1.1f;
+        const float dryT = 1.f - 0.5f * P.space;
         const float lv   = P.level;
         const float inG  = P.inLevel;
         const float md   = 0.0006f * sr_;
@@ -306,7 +319,9 @@ class Engine
             const float wl = (d[0] + d[2] + d[4] + d[6]) * 0.5f;
             const float wr = (d[1] + d[3] + d[5] + d[7]) * 0.5f;
             // one-pole high-pass at about 15 Hz removes any DC before the output stage
-            const float ml = dry * fl + wet * wl, mr = dry * fr + wet * wr;
+            wetS_ += (wetT - wetS_) * 0.002f; // about 10 ms, so a switch flip does not click
+            dryS_ += (dryT - dryS_) * 0.002f;
+            const float ml = dryS_ * fl + wetS_ * wl, mr = dryS_ * fr + wetS_ * wr;
             const float yl = ml - hx_[0] + 0.998f * hy_[0];
             const float yr = mr - hx_[1] + 0.998f * hy_[1];
             hx_[0] = ml; hy_[0] = yl; hx_[1] = mr; hy_[1] = yr;
@@ -329,29 +344,64 @@ class Engine
         return (float)(s >> 8) * (1.f / 16777216.f);
     }
 
-    void Pick(int s)
+    // Notes the voice may play, in semitones above the root, for the current scale and spread.
+    int Cands(int s, int* c) const
     {
-        static const int sc[4][7]  = {{0, 3, 5, 7, 10, -1, -1},
-                                      {0, 2, 3, 5, 7, 9, 10},
-                                      {0, 2, 4, 6, 7, 9, 11},
-                                      {0, 7, 14, -1, -1, -1, -1}};
-        static const int scn[4] = {5, 7, 7, 3};
-        int              si = P.scale < 0 ? 0 : (P.scale > 3 ? 3 : P.scale);
-        int              c[40];
-        int              nc = 0;
+        static const int sc[8][7]  = {{0, 7, 14, -1, -1, -1, -1},   // open fifths
+                                      {0, 3, 5, 7, 10, -1, -1},     // minor pentatonic
+                                      {0, 2, 3, 7, 8, -1, -1},      // hirajoshi
+                                      {0, 1, 3, 5, 7, 8, 10},       // phrygian
+                                      {0, 2, 3, 5, 7, 9, 10},       // dorian
+                                      {0, 2, 4, 7, 9, -1, -1},      // major pentatonic
+                                      {0, 2, 4, 6, 7, 9, 11},       // lydian
+                                      {0, 2, 4, 6, 8, 10, -1}};     // whole tone
+        static const int scn[8]    = {3, 5, 5, 7, 7, 5, 7, 6};
+        const int        si        = P.scale < 0 ? 0 : (P.scale > 7 ? 7 : P.scale);
+        const float      sp        = P.spread < 0.f ? 0.f : (P.spread > 1.f ? 1.f : P.spread);
+        const int        hi0       = (int)(sp * 36.f + 0.5f);
+        const int        lo        = (int)((float)lo_[s] * sp);
+        const int        hi        = hi0 < lo ? lo : hi0;
+        int              nc        = 0;
         for(int o = 0; o <= 36; o += 12)
             for(int j = 0; j < scn[si]; j++)
             {
-                int v = sc[si][j] + o;
-                if(v >= lo_[s] && v <= hi_[s] && nc < 40)
+                const int v = sc[si][j] + o;
+                if(v >= lo && v <= hi && nc < 40)
                     c[nc++] = v;
             }
         if(!nc)
             c[nc++] = 0;
-        int v = c[(int)(Rnd() * nc) % nc];
-        if(nc > 1 && (float)v == stgt_[s])
-            v = c[(int)(Rnd() * nc) % nc];
-        stgt_[s] = (float)v;
+        return nc;
+    }
+
+    float PitchFromY(int s, float y) const
+    {
+        int c[40];
+        const int nc = Cands(s, c);
+        int       i  = (int)(y * (float)nc);
+        if(i < 0)
+            i = 0;
+        if(i >= nc)
+            i = nc - 1;
+        return (float)c[i];
+    }
+
+    // Start the voice's next note. Free: the next pitch comes from the last note length, the next length from the
+    // new pitch. Locked: the same pitch and length repeat. force = true always works out a new note.
+    void StartNote(int s, bool force)
+    {
+        if(force || !frozen_)
+        {
+            float y = y_[s] * 3.1f + dm0_[s] * 2.3f + 0.137f;
+            y -= floorf(y);
+            y_[s]   = y;
+            yn_[s]  = y;
+            const float pit = PitchFromY(s, y);
+            stgt_[s]        = pit;
+            dm0_[s]         = sqrtf(exp2f(pit / 12.f));
+            dm_[s]          = dm0_[s] * (0.97f + 0.06f * Rnd());
+        }
+        xph_[s] = 0.f;
     }
 
     void Tick()
@@ -377,8 +427,9 @@ class Engine
         if(tph_ > 6.28318530718f)
             tph_ -= 6.28318530718f;
         const float tuneC = P.tune + wow_ * P.wow * 12.f + sinf(tph_) * P.wow * 1.2f;
-        const float tauG  = P.glide < 0.2f ? 0.2f : P.glide;
-        rootS_ += (P.root - rootS_) * (1.f - expf(-dt / tauG));
+        const float tauG  = P.glide < 0.005f ? 0.005f : P.glide;
+        const float tauR  = tauG < 0.03f ? 0.03f : (tauG > 2.f ? 2.f : tauG);
+        rootS_ += (P.root - rootS_) * (1.f - expf(-dt / tauR));
         rootHz_ = 440.f * exp2f((rootS_ - 69.f) / 12.f + tuneC / 1200.f);
         // master swell
         mt_ -= dt;
@@ -390,21 +441,53 @@ class Engine
         mdb_ += (mtg_ - mdb_) * (1.f - expf(-dt / 8.f));
         const float mg    = powf(10.f, mdb_ / 20.f);
         const float kg    = 1.f - expf(-dt / tauG);
-        const float kgate = 1.f - expf(-dt / 3.f);
-        const float spanT = 120.f - 105.f * P.harm;
+        const float kgate = 1.f - expf(-dt / 0.25f);
+        const float rateS = P.rate < 0.05f ? 0.05f : P.rate;
+        {
+            // scale or spread changed: every voice re-picks its current note at once, from the same chain value
+            const int sig = P.scale * 100 + (int)(P.spread * 64.f);
+            if(sig != sig_)
+            {
+                sig_ = sig;
+                for(int s = 0; s < kVoices; s++)
+                    stgt_[s] = PitchFromY(s, yn_[s]);
+            }
+        }
+        static const float kEA[3] = {0.5f, 0.3f, 0.01f};  // attack share of the note
+        static const float kEP[3] = {1.2f, 1.6f, 3.0f};   // decay curve
+        static const float kEF[3] = {0.18f, 0.f, 0.f};    // level the note never drops below
+        const int          ev    = P.env < 0 ? 0 : (P.env > 2 ? 2 : P.env);
+        float              actS  = 0.f;
         const float kA    = 1.f - expf(-dt / (1.f + 3.f * (1.f - P.breath)));
         const float kc    = 1.f - expf(-dt / 3.f);
         const float wd    = P.width;
         for(int s = 0; s < kVoices; s++)
         {
-            if(!frozen_)
+            const float dur = rateS * dm_[s];
+            xph_[s] += dt / dur;
+            if(xph_[s] >= 1.f)
             {
-                stm_[s] -= dt;
-                if(stm_[s] <= 0.f)
+                xph_[s] -= floorf(xph_[s]);
+                StartNote(s, false);
+            }
+            {
+                float a = kEA[ev];
+                const float amin = 0.012f / dur; // never faster than 12 ms, so no click
+                if(a < amin)
+                    a = amin;
+                if(a > 0.5f)
+                    a = 0.5f;
+                const float x = xph_[s];
+                float       e;
+                if(x < a)
                 {
-                    stm_[s] = spanT * (0.5f + Rnd());
-                    Pick(s);
+                    const float t = x / a;
+                    e             = t * t * (3.f - 2.f * t);
                 }
+                else
+                    e = powf(1.f - (x - a) / (1.f - a), kEP[ev]);
+                const float amp = kEF[ev] + (1.f - kEF[ev]) * e;
+                envS_[s] += (amp - envS_[s]) * 0.4f;
             }
             semi_[s] += (stgt_[s] - semi_[s]) * kg;
             gate_[s] += ((s < P.dens ? 1.f : 0.f) - gate_[s]) * kgate;
@@ -415,7 +498,9 @@ class Engine
                 atg_[s] = -Rnd() * (4.f + 18.f * P.breath);
             }
             ampdb_[s] += (atg_[s] - ampdb_[s]) * kA;
-            const float vl = gate_[s] * vg_[s] * powf(10.f, ampdb_[s] / 20.f) * mg * 1.0f;
+            const float vl = gate_[s] * vg_[s] * envS_[s] * powf(10.f, ampdb_[s] / 20.f) * mg * 0.75f * P.gain; // 0.75 keeps six dense voices out of the limiter
+            if(s < P.dens)
+                actS += envS_[s] * gate_[s];
             for(int c = 0; c < kCopies; c++)
             {
                 const int i = s * kCopies + c;
@@ -435,11 +520,12 @@ class Engine
                 gR_[i]            = sinf(th) * vl;
             }
         }
+        act_     = actS / (float)(P.dens < 1 ? 1 : P.dens);
         binc_[0] = rootHz_ * exp2f(4.f / 1200.f) / sr_;
         binc_[1] = rootHz_ * exp2f(-4.f / 1200.f) / sr_;
         bodyG_   = P.body * 0.2f;
         // low-pass biquad
-        float fc = 120.f * exp2f(P.dark * 5.5f + fw_ * 0.7f * P.drift);
+        float fc = 120.f * exp2f(P.dark * 5.5f + fw_ * 0.7f * P.drift + (rootS_ - 34.f) / 24.f); // follows the root by half
         if(fc > sr_ * 0.4f)
             fc = sr_ * 0.4f;
         if(fc < 40.f)
@@ -473,10 +559,13 @@ class Engine
     uint32_t  rs_ = 1;
     int       tc_ = 0;
     bool      frozen_ = false;
-    int       lo_[kVoices], hi_[kVoices];
+    int       lo_[kVoices];
+    float     xph_[kVoices], dm_[kVoices], dm0_[kVoices], y_[kVoices], yn_[kVoices], envS_[kVoices];
+    int       rr_ = 0, sig_ = -1;
+    float     act_ = 0.f, wetS_ = 0.f, dryS_ = 1.f;
     float     vg_[kVoices];
     float     ph_[kOsc], inc_[kOsc], gL_[kOsc], gR_[kOsc], cw_[kOsc], ctg_[kOsc], ct_[kOsc];
-    float     semi_[kVoices], stgt_[kVoices], stm_[kVoices];
+    float     semi_[kVoices], stgt_[kVoices];
     float     ampdb_[kVoices], atg_[kVoices], atm_[kVoices], gate_[kVoices];
     float     wow_, wtg_, wtm_, fw_, ftg_, ftm_, tph_;
     float     mt_, mdb_, mtg_;
