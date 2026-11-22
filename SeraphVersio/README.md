@@ -1,7 +1,7 @@
 # Seraph for Noise Engineering Versio
 
-A drone and pad engine, built from measurements of *Seraphim* by How To Disappear Completely, with a panel and note logic modelled on the Sdkc Instruments Helical.
-Six voices, each a cluster of four slightly detuned copies. A dark 24 dB low-pass, a sub sine, and an eight-line reverb that can ring for about 30 seconds.
+A drone and bell engine, with a panel and note logic modelled on the Sdkc Instruments Helical. The saw-drone end of the Wave knob comes from measurements of *Seraphim* by How To Disappear Completely; the sine end comes from measurements of a recording of the Helical.
+Twelve voices, each a pair of slightly detuned copies. A 24 dB low-pass, a sub sine, a band-limited noise bed, and an eight-line reverb that can ring for about 30 seconds.
 
 ## How the notes work (the Helical idea)
 
@@ -12,6 +12,14 @@ Every voice plays its own note with its own swell. When a note ends, the voice w
 
 Because every pitch has its own length, the voices drift in and out of step and make slow rhythms that are not tied to any tempo. The same seed always gives the same pattern. A short tap on the button makes a new seed.
 
+## The sine end sounds like the Helical
+
+I measured a five-minute recording of the Helical ("First play 1"). It is almost pure sine tones, with every harmonic at least 35 dB below the note and nothing above about 700 Hz. Each note starts instantly and fades smoothly to silence over 1.3 to 4 seconds. About six notes sound at once, 2.8 new notes start every second, each pitch keeps its own length, and every note sits hard left or hard right with no chorus or detune. The notes are E major, from E2 to E5.
+
+With Wave fully left, Seraph does the same: pure sines, each voice hard left or hard right, small detune, almost no sub or noise, and notes that start fast and fade out. Turning Wave right adds saw, a wider detune, the sub and the noise bed, and the voices become the dense drone from the album. In between, each note starts at the Wave sound and rings down to a pure sine as it fades, which is the same trick a struck bar or string does (the bright overtones die first).
+
+To get close to the recording: Root at the middle (E2), Scale on the sixth step (major), Voices full right, Rate about 46%, Glide full left, Spread full right, Wave full left, switch 1 right (Pluck), switch 2 left (Room).
+
 ## One flat panel
 
 There are no Setup pages, no modes and nothing to pick up. Every knob and switch does what it says at once, and every knob takes CV.
@@ -21,19 +29,19 @@ There are no Setup pages, no modes and nothing to pick up. Every knob and switch
 | Knob | Does |
 |---|---|
 | 1 Root | Root note, 37 steps from A#0 (29 Hz) to A#3. Glides to a new note (glide is capped at 2 s here). |
-| 2 Scale | Eight scales, dark on the left to bright on the right: open fifths, minor pentatonic, hirajoshi, phrygian, dorian, major pentatonic, lydian, whole tone. LED 3 shows the scale colour. Changing it moves the notes at once. |
-| 3 Voices | One to six voices, in steps. The 1 voice setting is a single melodic line. Voices fade in and out in about a second. |
+| 2 Scale | Eight scales, dark on the left to bright on the right: open fifths, minor pentatonic, hirajoshi, phrygian, dorian, major, lydian, whole tone. LED 3 shows the scale colour. Changing it moves the notes at once. |
+| 3 Voices | One to twelve voices, in steps. One voice is a single melodic line. Voices fade in and out in about a second. |
 | 4 Rate | How long notes last at the root: 0.12 s (fast, plucked runs) to 48 s (slow drone). Takes effect at once, even in the middle of a note. This is Helical's Helicity. |
 | 5 Glide | How long notes slide to the next pitch: 0.01 s (stepped) to 12 s (long slides). |
 | 6 Spread | Pitch range above the root. Fully left, every voice plays the root only (a wide chorus). Fully right, notes reach three octaves up, with the higher voices staying higher. Takes effect at once. |
-| 7 Wave | Sine on the left to saw on the right, and the filter opens as it goes. The loudness is levelled across the knob. |
+| 7 Wave | Left: clean sine, tight detune, almost no sub or noise (the Helical sound). Right: saw, wide detune, sub and noise bed (the album drone). The filter, detune, sub and noise all move with it, and the loudness is levelled across the knob. |
 
 **Switches** (they slide left, centre and right)
 
 | Switch | Left | Centre | Right |
 |---|---|---|---|
 | 1 Env | Soft: slow swell in, long fade, never fully silent | Even: symmetric swell | Pluck: fast attack, long decay |
-| 2 Space | Room: about 4 s | Hall: about 10 s | Vast: about 30 s |
+| 2 Space | Room: almost dry, about 2 s | Hall: about 10 s | Vast: about 30 s |
 
 I assumed left is the first label printed beside each switch. That is not confirmed.
 
@@ -48,7 +56,7 @@ I assumed left is the first label printed beside each switch. That is not confir
 
 **Audio inputs.** Not used in this version. The old input mix was part of Setup, which is gone.
 
-Things that used to have knobs are now fixed at the values measured from the album: cluster 16 cents, drift 0.5, wow 0.4, noise bed 0.15, sub 0.5, width full, damping 0.4. Space switch sets reverb amount, size and decay together.
+Fixed in the firmware: drift 0.5, wow 0.05, damping 0.4, full stereo width, every voice hard left or right, and the strike effect on. The Space switch sets reverb amount, size and decay together. The Room position is nearly dry on purpose: the reverb spreads each note to both sides, which blurs the hard panning.
 
 ## LEDs
 
@@ -83,6 +91,7 @@ Verified on a computer:
 - A scripted run of the control logic in `main.cpp` (41 checks): every knob's range, all eight scales and six voice counts selectable, no flutter on step edges, switch mapping, tap short and hold, gate, and 3 minutes of random knob, switch, tap and gate input.
 - Note behaviour (16 checks): Rate speeds up notes within a second, Spread 0 is root only and Spread 1 reaches three octaves, Lock repeats pitch and length, scale changes apply at once while locked, the same seed gives the same pattern, length follows pitch, the pattern does not fall into a short loop, removed voices fade in about a second.
 - Level: the Wave knob stays within about 1 dB across its range, and the worst case over every switch, rate, spread and root combination stays below the limiter ceiling, with the output trim at 0.5.
+- Sound: with Wave fully left a single voice has harmonics at least 69 dB below the note, each voice can sit entirely on one side, notes start bright and ring down to a sine, and with 12 voices at Rate about 46% there are about 6 notes sounding at once and 3 new notes a second, like the recording. I measured the recording; I cannot hear it, so whether it feels the same is for your ears.
 - The cloud build compiles against the real libDaisy.
 
 Not verified, because nobody has flashed it yet:

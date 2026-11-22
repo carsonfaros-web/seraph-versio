@@ -14,8 +14,8 @@
 
 namespace seraph
 {
-constexpr int kVoices = 6;
-constexpr int kCopies = 4;
+constexpr int kVoices = 12;
+constexpr int kCopies = 2;
 constexpr int kOsc    = kVoices * kCopies;
 constexpr int kLines  = 8;
 constexpr int kBuf    = 16384; // samples per reverb line (0.34 s at 48 kHz)
@@ -51,7 +51,7 @@ struct Params
 {
     float root   = 34.f; // MIDI note of the root (34 = A#1)
     int   scale  = 4;    // 0..7, dark to bright: open fifths, minor pent, hirajoshi, phrygian, dorian, major pent, lydian, whole tone
-    int   dens   = 5;    // active voices, 1..6
+    int   dens   = 6;    // active voices, 1..12
     float clus   = 16.f; // cluster spread, cents
     float drift  = 0.5f;
     float timbre = 0.6f; // 0 sine .. 1 saw
@@ -69,6 +69,8 @@ struct Params
     float tune   = 0.f; // cents
     float noise  = 0.15f;
     float width  = 1.f;
+    float vpan   = 0.f;  // 0 = each voice's copies spread across the stereo field, 1 = each voice sits hard left or right
+    float strike = 0.f;  // 0 = timbre fixed, 1 = each note starts at the Wave timbre and rings down to a pure sine
     float level  = 0.7f;
     float glide  = 0.35f; // seconds, note glide (root glide is capped at 2 s)
     float inLevel = 0.f; // external audio into the filter and reverb
@@ -100,6 +102,7 @@ class Engine
         wetS_ = P.space * 1.1f;
         dryS_ = 1.f - 0.5f * P.space;
         memset(envS_, 0, sizeof(envS_));
+        memset(tv_, 0, sizeof(tv_));
         wow_ = wtg_ = wtm_ = fw_ = ftg_ = ftm_ = 0.f;
         tph_ = 0.f;
         tc_  = 0;
@@ -112,8 +115,8 @@ class Engine
             lr_[i]     = (0.07f + 0.021f * i) / sr_;
             len_[i]    = baseMs_[i] * 0.001f * sr_;
         }
-        const int lo[kVoices] = {0, 0, 7, 12, 12, 19};
-        const float vg[kVoices] = {0.85f, 1.f, 0.85f, 0.7f, 0.6f, 0.5f};
+        const int lo[kVoices] = {0, 0, 0, 0, 7, 7, 12, 12, 12, 14, 19, 19};
+        const float vg[kVoices] = {0.85f, 1.f, 0.85f, 1.f, 0.85f, 0.8f, 0.7f, 0.7f, 0.6f, 0.6f, 0.5f, 0.5f};
         for(int s = 0; s < kVoices; s++)
         {
             lo_[s] = lo[s];
@@ -193,6 +196,8 @@ class Engine
         P.glide   = Cl(P.glide, 0.005f, 60.f);
         P.inLevel = Cl(P.inLevel, 0.f, 2.f);
         P.gain    = Cl(P.gain, 0.f, 2.f);
+        P.vpan    = Cl(P.vpan, 0.f, 1.f);
+        P.strike  = Cl(P.strike, 0.f, 1.f);
     }
 
     void  SetFrozen(bool f) { frozen_ = f; }
@@ -204,7 +209,6 @@ class Engine
     void Render(const float* inL, const float* inR, float* outL, float* outR, int n)
     {
         Sanitize();
-        const float T    = P.timbre;
         const float wetT = P.space * 1.1f;
         const float dryT = 1.f - 0.5f * P.space;
         const float lv   = P.level;
@@ -239,7 +243,8 @@ class Engine
                     float t = (p - 1.f) / dt;
                     saw -= t * t + t + t + 1.f;
                 }
-                const float s = (1.f - T) * FastSin01(p) + T * saw;
+                const float Tv = tv_[i / kCopies];
+                const float s  = (1.f - Tv) * FastSin01(p) + Tv * saw;
                 l += s * gl;
                 r += s * gr;
             }
@@ -352,10 +357,10 @@ class Engine
                                       {0, 2, 3, 7, 8, -1, -1},      // hirajoshi
                                       {0, 1, 3, 5, 7, 8, 10},       // phrygian
                                       {0, 2, 3, 5, 7, 9, 10},       // dorian
-                                      {0, 2, 4, 7, 9, -1, -1},      // major pentatonic
+                                      {0, 2, 4, 5, 7, 9, 11},       // major (ionian)
                                       {0, 2, 4, 6, 7, 9, 11},       // lydian
                                       {0, 2, 4, 6, 8, 10, -1}};     // whole tone
-        static const int scn[8]    = {3, 5, 5, 7, 7, 5, 7, 6};
+        static const int scn[8]    = {3, 5, 5, 7, 7, 7, 7, 6};
         const int        si        = P.scale < 0 ? 0 : (P.scale > 7 ? 7 : P.scale);
         const float      sp        = P.spread < 0.f ? 0.f : (P.spread > 1.f ? 1.f : P.spread);
         const int        hi0       = (int)(sp * 36.f + 0.5f);
@@ -472,7 +477,7 @@ class Engine
             }
             {
                 float a = kEA[ev];
-                const float amin = 0.012f / dur; // never faster than 12 ms, so no click
+                const float amin = 0.008f / dur; // never faster than 8 ms, so no click
                 if(a < amin)
                     a = amin;
                 if(a > 0.5f)
@@ -489,6 +494,7 @@ class Engine
                 const float amp = kEF[ev] + (1.f - kEF[ev]) * e;
                 envS_[s] += (amp - envS_[s]) * 0.4f;
             }
+            tv_[s] = P.timbre * (1.f - P.strike * (1.f - envS_[s] * envS_[s])); // bright at the strike, pure as it rings down
             semi_[s] += (stgt_[s] - semi_[s]) * kg;
             gate_[s] += ((s < P.dens ? 1.f : 0.f) - gate_[s]) * kgate;
             atm_[s] -= dt;
@@ -511,10 +517,12 @@ class Engine
                     ctg_[i] = Rnd() * 2.f - 1.f;
                 }
                 cw_[i] += (ctg_[i] - cw_[i]) * kc;
-                const float cents = P.clus * ((c - 1.5f) / 1.5f) * 0.75f + cw_[i] * P.clus * (0.25f + 0.5f * P.drift);
+                const float cc    = kCopies > 1 ? ((float)c - 0.5f * (float)(kCopies - 1)) / (0.5f * (float)(kCopies - 1)) : 0.f; // -1 .. +1
+                const float cents = P.clus * cc * 0.75f + cw_[i] * P.clus * (0.25f + 0.5f * P.drift);
                 const float f     = rootHz_ * exp2f(semi_[s] / 12.f + cents / 1200.f);
                 inc_[i]           = f / sr_;
-                const float pan   = ((c % 2 == 0) ? -1.f : 1.f) * (c < 2 ? 1.f : 0.55f) * ((s % 2) ? -1.f : 1.f) * wd;
+                const float pan0  = ((c % 2 == 0) ? -1.f : 1.f) * (c < 2 ? 1.f : 0.55f) * ((s % 2) ? -1.f : 1.f);
+                const float pan   = (pan0 + (((s % 2) ? 1.f : -1.f) - pan0) * P.vpan) * wd;
                 const float th    = (pan + 1.f) * 0.78539816f;
                 gL_[i]            = cosf(th) * vl;
                 gR_[i]            = sinf(th) * vl;
@@ -526,6 +534,11 @@ class Engine
         bodyG_   = P.body * 0.2f;
         // low-pass biquad
         float fc = 120.f * exp2f(P.dark * 5.5f + fw_ * 0.7f * P.drift + (rootS_ - 34.f) / 24.f); // follows the root by half
+        {
+            const float topHz = rootHz_ * exp2f(P.spread * 3.f); // never close the filter on the highest note the voices can play
+            if(fc < 1.4f * topHz)
+                fc = 1.4f * topHz;
+        }
         if(fc > sr_ * 0.4f)
             fc = sr_ * 0.4f;
         if(fc < 40.f)
@@ -560,6 +573,7 @@ class Engine
     int       tc_ = 0;
     bool      frozen_ = false;
     int       lo_[kVoices];
+    float     tv_[kVoices] = {0};
     float     xph_[kVoices], dm_[kVoices], dm0_[kVoices], y_[kVoices], yn_[kVoices], envS_[kVoices];
     int       rr_ = 0, sig_ = -1;
     float     act_ = 0.f, wetS_ = 0.f, dryS_ = 1.f;

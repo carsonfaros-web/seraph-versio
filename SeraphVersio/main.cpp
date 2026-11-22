@@ -6,7 +6,7 @@
 //
 //   Knobs (7, all take CV):  1 Root | 2 Scale | 3 Voices | 4 Rate | 5 Glide | 6 Spread | 7 Wave
 //   Switch 1:                Env    (left soft swell, centre even, right pluck)
-//   Switch 2:                Space  (left room, centre hall, right vast)
+//   Switch 2:                Space  (left small room, centre hall, right vast)
 //   Tap, short:              new seed (every voice starts a new note, new pattern)
 //   Tap, hold 0.8 s or more: Lock on or off (notes and lengths repeat, scale and spread still work)
 //   Gate in (Tap jack):      each rising edge starts the next voice's note, so a clock can play it
@@ -47,14 +47,14 @@ static int SwPos(Switch3& s)
 static float gKnob[7];           // smoothed 0..1
 static int   gRootN  = 12;       // root, 0..36 semitones above A#0
 static int   gScaleI = 4;        // scale, 0..7
-static int   gVoices = 5;        // voices, 1..6
+static int   gVoices = 6;        // voices, 1..12
 static bool  gFirst  = true;     // first block: take knob positions as they are
 static float gFade   = 0.f;      // slow fade-in after power-up
 
 // Switch settings: Space is reverb amount, decay and size together
-static const float kSpace[3] = {0.35f, 0.62f, 0.80f};
-static const float kDecay[3] = {0.25f, 0.55f, 0.90f}; // about 4 s, 10 s, 30 s
-static const float kSize[3]  = {0.35f, 0.50f, 0.75f};
+static const float kSpace[3] = {0.05f, 0.62f, 0.80f};
+static const float kDecay[3] = {0.00f, 0.55f, 0.90f}; // about 2 s, 10 s, 30 s
+static const float kSize[3]  = {0.25f, 0.50f, 0.75f};
 
 // Tap button
 static bool     gTapDown  = false;
@@ -119,8 +119,8 @@ static void Audio(AudioHandle::InputBuffer  in,
         gRootN = n < 0 ? 0 : (n > 36 ? 36 : n);
         int sc = (int)(gKnob[1] * 8.f);
         gScaleI = sc < 0 ? 0 : (sc > 7 ? 7 : sc);
-        int vc  = (int)(gKnob[2] * 6.f);
-        gVoices = (vc < 0 ? 0 : (vc > 5 ? 5 : vc)) + 1;
+        int vc  = (int)(gKnob[2] * 12.f);
+        gVoices = (vc < 0 ? 0 : (vc > 11 ? 11 : vc)) + 1;
     }
     gFade += (1.f - gFade) * 0.0005f; // about 2 seconds
 
@@ -178,8 +178,8 @@ static void Audio(AudioHandle::InputBuffer  in,
         // 2 Scale: eight scales, dark on the left to bright on the right
         gScaleI = Step(gKnob[1], 8, gScaleI);
         P.scale = gScaleI;
-        // 3 Voices: one to six
-        gVoices = Step(gKnob[2], 6, gVoices - 1) + 1;
+        // 3 Voices: one to twelve
+        gVoices = Step(gKnob[2], 12, gVoices - 1) + 1;
         P.dens  = gVoices;
         // 4 Rate: note length at the root, 0.12 s to 48 s (higher notes are longer)
         P.rate = 0.12f * powf(400.f, gKnob[3]);
@@ -187,12 +187,16 @@ static void Audio(AudioHandle::InputBuffer  in,
         P.glide = 0.01f * powf(1200.f, gKnob[4]);
         // 6 Spread: pitch range above the root, root only to three octaves
         P.spread = gKnob[5];
-        // 7 Wave: sine to saw, and the filter opens with it
+        // 7 Wave: left is a clean struck sine (as on the Helical), right is a dense saw drone. The timbre, the
+        // filter, the detune of the copies, the sub and the air bed all move together with it.
         P.timbre = 0.9f * gKnob[6];
         P.dark   = 0.35f + 0.5f * gKnob[6];
+        P.clus   = 1.5f + 16.5f * gKnob[6]; // 1.5 to 18 cents
+        P.body   = 0.1f + 0.4f * gKnob[6];
+        P.noise  = 0.03f + 0.12f * gKnob[6];
         {
             // level trim measured across the Wave knob, so sine, mixed and saw sound equally loud
-            static const float kWaveTrim[9] = {0.45f, 0.50f, 0.59f, 0.76f, 1.06f, 1.42f, 1.16f, 0.79f, 0.57f};
+            static const float kWaveTrim[9] = {0.56f, 0.62f, 0.70f, 0.79f, 0.88f, 0.99f, 0.97f, 0.82f, 0.63f};
             const float        f            = gKnob[6] * 8.f;
             int                i            = (int)f;
             if(i > 7)
@@ -203,16 +207,15 @@ static void Audio(AudioHandle::InputBuffer  in,
             P.gain         = kWaveTrim[i] + (kWaveTrim[i + 1] - kWaveTrim[i]) * fr;
         }
     }
-    // fixed to the settings measured from the album
-    P.clus   = 16.f;
+    // fixed
     P.drift  = 0.5f;
     P.breath = 0.1f;
-    P.body   = 0.5f;
     P.damp   = 0.4f;
-    P.wow    = 0.4f;
+    P.wow    = 0.05f;
     P.tune   = 0.f;
-    P.noise  = 0.15f;
     P.width  = 1.f;
+    P.vpan   = 1.f;  // every voice sits hard left or right, as on the recording of the Helical
+    P.strike = 1.f;  // each note starts at the Wave timbre and rings down to a pure sine
     P.level  = 0.7f;
     P.inLevel = 0.f;
 
