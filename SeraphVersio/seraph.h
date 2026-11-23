@@ -30,6 +30,15 @@ inline float FastSin01(float p)
     return 0.225f * (y * fabsf(y) - y) + y;
 }
 
+// A triangle wave in the same phase as the sine above (zero at p = 0, peak at p = 0.25). Soft and round: its
+// harmonics fall away as 1/n squared (the third is 19 dB below the note), so there is no aliasing to correct.
+inline float FastTri01(float p)
+{
+    const float t = p < 0.5f ? p : p - 1.f;
+    const float m = 1.f - fabsf(1.f - 4.f * fabsf(t));
+    return t < 0.f ? -m : m;
+}
+
 inline float FastTanh(float x)
 {
     if(x > 3.f)
@@ -54,7 +63,7 @@ struct Params
     int   dens   = 6;    // active voices, 1..12
     float clus   = 16.f; // cluster spread, cents
     float drift  = 0.5f;
-    float timbre = 0.6f; // 0 sine .. 1 saw
+    float timbre = 0.6f; // 0 sine .. 1 soft triangle
     float breath = 0.1f; // depth of the slow random level wander
     float rate   = 2.4f; // seconds per note at the root; the higher the pitch, the longer the note (up to 2.8x)
     float spread = 1.f;  // pitch range above the root: 0 = root only, 1 = three octaves
@@ -231,20 +240,8 @@ class Engine
                 const float gl = gL_[i], gr = gR_[i];
                 if(gl + gr < 1e-6f)
                     continue;
-                const float dt  = inc_[i];
-                float       saw = 2.f * p - 1.f;
-                if(p < dt)
-                {
-                    float t = p / dt;
-                    saw -= t + t - t * t - 1.f;
-                }
-                else if(p > 1.f - dt)
-                {
-                    float t = (p - 1.f) / dt;
-                    saw -= t * t + t + t + 1.f;
-                }
                 const float Tv = tv_[i / kCopies];
-                const float s  = (1.f - Tv) * FastSin01(p) + Tv * saw;
+                const float s  = (1.f - Tv) * FastSin01(p) + Tv * FastTri01(p);
                 l += s * gl;
                 r += s * gr;
             }

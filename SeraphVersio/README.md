@@ -1,7 +1,7 @@
 # Seraph for Noise Engineering Versio
 
-A drone and bell engine, with a panel and note logic modelled on the Sdkc Instruments Helical. The saw-drone end of the Wave knob comes from measurements of *Seraphim* by How To Disappear Completely; the sine end comes from measurements of a recording of the Helical.
-Twelve voices, each a pair of slightly detuned copies. A 24 dB low-pass, a sub sine, a band-limited noise bed, and an eight-line reverb that can ring for about 30 seconds.
+A soft, round bell and pad engine, with a panel and note logic modelled on the Sdkc Instruments Helical. The whole Wave range stays gentle: the sine end comes from measurements of a recording of the Helical, and the other end is a soft triangle with a little shimmer. There is no saw, no heavy detune and no drone bed.
+Twelve voices, each a pair of slightly detuned copies. A 24 dB low-pass, a quiet sub sine, a faint band-limited noise bed, and an eight-line reverb that can ring for about 30 seconds.
 
 ## How the notes work (the Helical idea)
 
@@ -16,7 +16,7 @@ Because every pitch has its own length, the voices drift in and out of step and 
 
 I measured a five-minute recording of the Helical ("First play 1"). It is almost pure sine tones, with every harmonic at least 35 dB below the note and nothing above about 700 Hz. Each note starts instantly and fades smoothly to silence over 1.3 to 4 seconds. About six notes sound at once, 2.8 new notes start every second, each pitch keeps its own length, and every note sits hard left or hard right with no chorus or detune. The notes are E major, from E2 to E5.
 
-With Wave fully left, Seraph does the same: pure sines, each voice hard left or hard right, small detune, almost no sub or noise, and notes that start fast and fade out. Turning Wave right adds saw, a wider detune, the sub and the noise bed, and the voices become the dense drone from the album. In between, each note starts at the Wave sound and rings down to a pure sine as it fades, which is the same trick a struck bar or string does (the bright overtones die first).
+With Wave fully left, Seraph does the same: pure sines, each voice hard left or hard right, small detune, almost no sub or noise, and notes that start fast and fade out. Turning Wave right rounds the tone toward a soft triangle (the third harmonic is only 19 dB below the note, and fades as the note rings down), with a little more detune (up to 6 cents), a touch of sub and a touch of air. It never becomes a saw or a dense drone. In between, each note starts at the Wave sound and rings down to a pure sine as it fades, which is the same trick a struck bar or string does (the bright overtones die first).
 
 To get close to the recording: Root at the middle (E2), Scale on the sixth step (major), Voices full right, Rate about 46%, Glide full left, Spread full right, Wave full left, switch 1 right (Pluck), switch 2 left (Room).
 
@@ -34,7 +34,7 @@ There are no Setup pages, no modes and nothing to pick up. Every knob and switch
 | 4 Rate | How long notes last at the root: 0.12 s (fast, plucked runs) to 48 s (slow drone). Takes effect at once, even in the middle of a note. This is Helical's Helicity. |
 | 5 Glide | How long notes slide to the next pitch: 0.01 s (stepped) to 12 s (long slides). |
 | 6 Spread | Pitch range above the root. Fully left, every voice plays the root only (a wide chorus). Fully right, notes reach three octaves up, with the higher voices staying higher. Takes effect at once. |
-| 7 Wave | Left: clean sine, tight detune, almost no sub or noise (the Helical sound). Right: saw, wide detune, sub and noise bed (the album drone). The filter, detune, sub and noise all move with it, and the loudness is levelled across the knob. |
+| 7 Wave | Left: clean sine, tight detune, almost no sub or noise (the Helical sound). Right: soft round triangle, a little more shimmer (up to 6 cents), a touch of sub and air. The filter, detune, sub and noise all move with it, and the loudness is levelled across the knob. |
 
 **Switches** (they slide left, centre and right)
 
@@ -57,12 +57,12 @@ I assumed left is the first label printed beside each switch. That is not confir
 **Audio inputs (In L and In R).** Patch any sound in and it steers the drones. There is no knob and nothing to set.
 
 - Its **loudness** swells the voices: the quietest part of the input brings the drones down to about 30% of their level (about -10 dB), the loudest part leaves them at full level. Loudness is measured against the input's own recent peak, so a quiet source and a hot one steer the same.
-- Its **brightness** opens the filter and moves the tone toward saw: a dark source (kick, bass) darkens the drones, a bright one (hi-hats, noise, cymbals) brightens them.
+- Its **brightness** makes the tone rounder (sine toward the soft triangle) and opens the filter a little: a dark source (kick, bass) keeps the voices pure, a bright one (hi-hats, noise, cymbals) rounds them.
 - The notes still come from the scale. The input never changes the pitches.
 - It switches itself on when the input is louder than about -48 dBFS, fades in over about 0.3 s, and fades out about 2.5 s after the signal has gone for 1.5 s. With nothing patched in, or only a noise floor, the sound is identical to before (checked bit for bit).
 - LED 4 glows violet while the input is steering, brighter with the input level.
 
-To turn it off, set `kInAmount` to 0 in `main.cpp`. The effect is most obvious with Wave in the middle or on the right; with Wave fully left (pure sines) the main effect is the swell.
+To turn it off, set `kInAmount` to 0 in `main.cpp`. With Wave fully left (pure sines) the main effect is the swell; with Wave to the right the rounding of bright input is audible too.
 
 The audio engine's old input mix is still in the code (`P.inLevel`) but the panel keeps it at 0, so the input is never mixed into the sound itself.
 
@@ -101,7 +101,7 @@ Verified on a computer:
 - A scripted run of the control logic in `main.cpp` (41 checks): every knob's range, all eight scales and six voice counts selectable, no flutter on step edges, switch mapping, tap short and hold, gate, and 3 minutes of random knob, switch, tap and gate input.
 - Note behaviour (16 checks): Rate speeds up notes within a second, Spread 0 is root only and Spread 1 reaches three octaves, Lock repeats pitch and length, scale changes apply at once while locked, the same seed gives the same pattern, length follows pitch, the pattern does not fall into a short loop, removed voices fade in about a second.
 - Audio input (host tests with a kick, hi-hats, bass, noise swell, sines, a noise floor, NaN, infinity, 1e30 values, DC and full-scale noise): with a silent input the output is bit-identical to the version without input steering, a noise floor never switches it on, a hot and a quiet input steer the same, kick and bass read dark and hats and noise read bright, it releases about 10 s after the input stops, and nothing produced NaN or tripped the sanitizers. The browser simulator matches the C++ within 0.3 dB.
-- Level: the Wave knob stays within about 1 dB across its range, and the worst case over every switch, rate, spread and root combination stays below the limiter ceiling, with the output trim at 0.5.
+- Level: the Wave knob stays within about 0.5 dB across its range, and the worst case over every switch, rate, spread and root combination stays below the limiter ceiling, with the output trim at 0.5.
 - Sound: with Wave fully left a single voice has harmonics at least 69 dB below the note, each voice can sit entirely on one side, notes start bright and ring down to a sine, and with 12 voices at Rate about 46% there are about 6 notes sounding at once and 3 new notes a second, like the recording. I measured the recording; I cannot hear it, so whether it feels the same is for your ears.
 - The cloud build compiles against the real libDaisy.
 

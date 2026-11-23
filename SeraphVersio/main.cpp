@@ -11,7 +11,7 @@
 //   Tap, hold 0.8 s or more: Lock on or off (notes and lengths repeat, scale and spread still work)
 //   Gate in (Tap jack):      each rising edge starts the next voice's note, so a clock can play it
 //   Audio in (L/R):          patch any sound in and its loudness swells the drones, its brightness opens the filter
-//                            and moves the tone toward saw (no knob; nothing happens with nothing patched in)
+//                            and makes the tone rounder (no knob; nothing happens with nothing patched in)
 #include "daisy_versio.h"
 #include "seraph.h"
 #include <cmath>
@@ -67,7 +67,7 @@ static uint32_t gSeedCtr  = 1;
 static bool gGatePrev = false;
 
 // Audio in steers the drones. No knob: when a signal is patched into In L or In R, its loudness swells the voices and
-// its brightness opens the filter and pushes the tone toward saw. The notes still come from the scale. With nothing
+// its brightness makes the tone rounder and opens the filter a little. The notes still come from the scale. With nothing
 // patched in, none of this has any effect. Set kInAmount to 0 to turn it off.
 static const float kInAmount = 1.f;
 static const float kInGate   = 0.004f; // peak level (about -48 dBFS) below which nothing counts as patched in
@@ -242,16 +242,17 @@ static void Audio(AudioHandle::InputBuffer  in,
         P.glide = 0.01f * powf(1200.f, gKnob[4]);
         // 6 Spread: pitch range above the root, root only to three octaves
         P.spread = gKnob[5];
-        // 7 Wave: left is a clean struck sine (as on the Helical), right is a dense saw drone. The timbre, the
-        // filter, the detune of the copies, the sub and the air bed all move together with it.
-        P.timbre = 0.9f * gKnob[6];
-        P.dark   = 0.35f + 0.5f * gKnob[6];
-        P.clus   = 1.5f + 16.5f * gKnob[6]; // 1.5 to 18 cents
-        P.body   = 0.1f + 0.4f * gKnob[6];
-        P.noise  = 0.03f + 0.12f * gKnob[6];
+        // 7 Wave: left is a clean struck sine (as on the Helical), right is a soft, round triangle with a little more
+        // shimmer. Everything stays gentle: no saw, no heavy detune, no drone bed. The timbre, the filter, the detune of
+        // the copies, the sub and the air all move together with it.
+        P.timbre = gKnob[6];
+        P.dark   = 0.35f + 0.25f * gKnob[6];
+        P.clus   = 1.5f + 4.5f * gKnob[6]; // 1.5 to 6 cents
+        P.body   = 0.1f + 0.15f * gKnob[6];
+        P.noise  = 0.03f + 0.04f * gKnob[6];
         {
-            // level trim measured across the Wave knob, so sine, mixed and saw sound equally loud
-            static const float kWaveTrim[9] = {0.56f, 0.62f, 0.70f, 0.79f, 0.88f, 0.99f, 0.97f, 0.82f, 0.63f};
+            // level trim measured across the Wave knob, so sine, mixed and triangle sound equally loud
+            static const float kWaveTrim[9] = {0.56f, 0.575f, 0.60f, 0.60f, 0.585f, 0.59f, 0.59f, 0.60f, 0.58f};
             const float        f            = gKnob[6] * 8.f;
             int                i            = (int)f;
             if(i > 7)
@@ -273,12 +274,13 @@ static void Audio(AudioHandle::InputBuffer  in,
     P.strike = 1.f;  // each note starts at the Wave timbre and rings down to a pure sine
     P.level  = 0.7f;
     P.inLevel = 0.f;
-    // audio in steers the drones: louder swells them, brighter opens the filter and moves the tone toward saw
+    // audio in shapes the sound: louder swells the voices, brighter makes the tone rounder (sine toward triangle) and
+    // opens the filter a little; darker input keeps it pure
     {
         const float a = kInAmount * gInAmt;
         P.gain *= 1.f - a * (1.f - (0.3f + 0.7f * gInLvl));
-        P.dark += a * (gInBri - 0.5f) * 0.5f;
-        P.timbre += a * (gInBri - 0.5f) * 0.6f;
+        P.dark += a * (gInBri - 0.5f) * 0.3f;
+        P.timbre += a * (gInBri - 0.5f) * 1.0f;
     }
 
     // ---- audio ----
