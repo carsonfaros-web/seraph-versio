@@ -1,6 +1,6 @@
 # Seraph for Noise Engineering Versio: handoff
 
-State as of 2026-11-22. Use this to continue in a new chat.
+State as of 2026-11-23. Use this to continue in a new chat.
 
 ## What it is
 Drone and ambient firmware for a Noise Engineering Yester Versio (Daisy Seed inside), built from measurements of *Seraphim* by How To Disappear Completely. Twelve voices of two detuned copies, a dark low-pass, a sub sine, and an eight-line reverb. Since 2026-11-21 the panel and note logic copy the Sdkc Instruments Helical, because the earlier scheme "did not feel intuitive" and "took too long to react".
@@ -25,7 +25,7 @@ Drone and ambient firmware for a Noise Engineering Yester Versio (Daisy Seed ins
 - Removed on purpose: Setup pages, pick-up, audio input mix into the sound (P.inLevel stays 0), cluster/drift/wow/tune/width/level knobs (fixed at album values).
 
 ## Tested
-PC build with ASan and UBSan: a scripted simulation of the Versio control logic (41 checks), note behaviour (16 checks: rate reacts at once, spread range, lock, scale change while locked, determinism, length follows pitch, no short loops, voices fade), loudness across the Wave knob (within ~1 dB), worst-case peak below the limiter, audio-input steering (silent input is bit-identical to before, noise floor ignored, NaN/inf/1e30/DC input safe, browser port within 0.3 dB of C++), random and extreme settings, out-of-range values, 30-minute runs, sample rates 32 to 192 kHz, block sizes 1 to 1024, and 3 minutes of random knob, switch, tap and gate input. The cloud build compiles against the real libDaisy.
+PC build with ASan and UBSan: a scripted simulation of the Versio control logic (41 checks), note behaviour (16 checks: rate reacts at once, spread range, lock, scale change while locked, determinism, length follows pitch, no short loops, voices fade), loudness across the Wave knob (within ~1 dB), worst-case peak below the limiter, audio-input steering (silent input is bit-identical to before, noise floor ignored, NaN/inf/1e30/DC input safe, browser port within 0.3 dB of C++), random and extreme settings, out-of-range values, 30-minute runs, sample rates 32 to 192 kHz, block sizes 1 to 1024, 3 minutes of random knob, switch, tap and gate input, and the clock input (29 checks: tempo detection, jitter, tempo changes, glitch rejection, timeout, all 13 ratios, clamps, counter wrap; JS port matches). The cloud build compiles against the real libDaisy.
 
 ## Not verified
 - Audio-input steering on hardware: input scaling vs kInGate, noise floor with nothing patched in.
