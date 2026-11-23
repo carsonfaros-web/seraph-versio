@@ -31,7 +31,7 @@ There are no Setup pages, no modes and nothing to pick up. Every knob and switch
 | 1 Root | Root note, 37 steps from A#0 (29 Hz) to A#3. Glides to a new note (glide is capped at 2 s here). |
 | 2 Scale | Eight scales, dark on the left to bright on the right: open fifths, minor pentatonic, hirajoshi, phrygian, dorian, major, lydian, whole tone. LED 3 shows the scale colour. Changing it moves the notes at once. |
 | 3 Voices | One to twelve voices, in steps. One voice is a single melodic line. Voices fade in and out in about a second. |
-| 4 Rate | How long notes last at the root: 0.12 s (fast, plucked runs) to 48 s (slow drone). Takes effect at once, even in the middle of a note. This is Helical's Helicity. |
+| 4 Rate | How long notes last at the root: 0.12 s (fast, plucked runs) to 48 s (slow drone). Takes effect at once, even in the middle of a note. This is Helical's Helicity. With a clock patched into the Tap jack it becomes 13 steps from a quarter to 32 times the clock period (1/4, 1/2, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32). |
 | 5 Glide | How long notes slide to the next pitch: 0.01 s (stepped) to 12 s (long slides). |
 | 6 Spread | Pitch range above the root. Fully left, every voice plays the root only (a wide chorus). Fully right, notes reach three octaves up, with the higher voices staying higher. Takes effect at once. |
 | 7 Wave | Left: clean sine, tight detune, almost no sub or noise (the Helical sound). Right: soft round triangle, a little more shimmer (up to 6 cents), a touch of sub and air. The filter, detune, sub and noise all move with it, and the loudness is levelled across the knob. |
@@ -52,7 +52,7 @@ I assumed left is the first label printed beside each switch. That is not confir
 | Short | New seed: every voice starts a new note now, in a new pattern. (Helical's reload.) |
 | Hold 0.8 s or more | Lock on or off. Locked, every voice repeats its current pitch and length, so the pattern loops. Scale and Spread still work while locked, and apply at once. |
 
-**Gate input (Tap jack).** Each rising edge starts the next voice's note, going round the voices in turn. Use a clock or sequencer to play the notes. Locked, it just retriggers them.
+**Clock input (Tap jack).** Patch a clock or gate into the Tap jack and its pulses set the tempo. The note length becomes the clock period times the step the Rate knob is on, so the whole pattern speeds up and slows down with your clock. It does not line notes up with the beats: each voice still picks its own pitch and length (higher notes are longer), and a pulse never starts a note, so this sets the timescale, not a rhythm. Use a steady clock; a tempo change is followed within a few pulses. With nothing patched in, or if the clock stops for about two seconds (2.5 periods on a slow clock), Rate goes back to free seconds, just as before. The Tap button works as before.
 
 **Audio inputs (In L and In R).** Patch any sound in and it steers the drones. There is no knob and nothing to set.
 
@@ -75,7 +75,7 @@ Fixed in the firmware: drift 0.5, wow 0.05, damping 0.4, full stereo width, ever
 | 1 | Output level (blue-white) |
 | 2 | Note activity: brightens as voices swell (teal) |
 | 3 | Scale colour: crimson (open fifths), magenta, violet, blue, teal, green, yellow, warm white (whole tone) |
-| 4 | Events: white flash on a new seed, green flash on a gate, slow amber pulse while Locked |
+| 4 | Events: white flash on a new seed, green flash on each clock pulse (and a faint green glow while a clock is followed), slow amber pulse while Locked |
 
 ## Files
 
@@ -98,7 +98,8 @@ Every push to `main` builds in GitHub Actions and puts `Seraph.bin` on the "late
 
 Verified on a computer:
 - `seraph.h` compiles with no warnings under `g++ -Wall -Wextra`, renders without NaNs, and was tested with AddressSanitizer and UBSan.
-- A scripted run of the control logic in `main.cpp` (41 checks): every knob's range, all eight scales and six voice counts selectable, no flutter on step edges, switch mapping, tap short and hold, gate, and 3 minutes of random knob, switch, tap and gate input.
+- A scripted run of the control logic in `main.cpp` (41 checks): every knob's range, all eight scales and six voice counts selectable, no flutter on step edges, switch mapping, tap short and hold, the clock pulse LED, and 3 minutes of random knob, switch, tap and gate input.
+- Clock input (29 checks, also under address and undefined-behaviour sanitizers): 120 bpm reads as 0.5 s, jitter of 3 ms is averaged out, tempo changes are followed, a glitch under 10 ms is ignored, a gap over 12 s resets, the clock times out back to free Rate after about 2 s, all 13 steps give period times ratio, Rate is clamped to 0.05 to 120 s, a stuck-high gate is not a clock, the millisecond counter wrapping is handled, and 3 minutes of random gate noise stays in range with no NaN.
 - Note behaviour (16 checks): Rate speeds up notes within a second, Spread 0 is root only and Spread 1 reaches three octaves, Lock repeats pitch and length, scale changes apply at once while locked, the same seed gives the same pattern, length follows pitch, the pattern does not fall into a short loop, removed voices fade in about a second.
 - Audio input (host tests with a kick, hi-hats, bass, noise swell, sines, a noise floor, NaN, infinity, 1e30 values, DC and full-scale noise): with a silent input the output is bit-identical to the version without input steering, a noise floor never switches it on, a hot and a quiet input steer the same, kick and bass read dark and hats and noise read bright, it releases about 10 s after the input stops, and nothing produced NaN or tripped the sanitizers. The browser simulator matches the C++ within 0.3 dB.
 - Level: the Wave knob stays within about 0.5 dB across its range, and the worst case over every switch, rate, spread and root combination stays below the limiter ceiling, with the output trim at 0.5.
@@ -109,7 +110,7 @@ Not verified, because nobody has flashed it yet:
 - Audio input steering on the real module: the input level scaling, how quiet a signal still switches it on (`kInGate`), and whether the inputs are quiet enough with nothing patched in.
 - How it sounds and feels on a real Versio.
 - Whether the audio callback fits in the CPU budget. Set `SERAPH_CPU_METER` to 1 in `main.cpp` to show CPU load on LED 4 (green is low, red is high).
-- The three-way switch directions, which knob is "knob 1", and whether the Tap jack reads as a gate.
+- The three-way switch directions, which knob is "knob 1", and whether the Tap jack reads as a gate (the clock input relies on it).
 - Output level into your system. `kOutTrim` in `main.cpp` adjusts it.
 
 ## Safety measures built into the firmware

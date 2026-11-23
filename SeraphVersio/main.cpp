@@ -9,7 +9,8 @@
 //   Switch 2:                Space  (left small room, centre hall, right vast)
 //   Tap, short:              new seed (every voice starts a new note, new pattern)
 //   Tap, hold 0.8 s or more: Lock on or off (notes and lengths repeat, scale and spread still work)
-//   Gate in (Tap jack):      each rising edge starts the next voice's note, so a clock can play it
+//   Clock in (Tap jack):     pulses set the tempo: note length = clock period x the Rate knob (1/4 to 32 times).
+//                            With no clock patched in, Rate is free seconds, as before.
 //   Audio in (L/R):          patch any sound in and its loudness swells the drones, its brightness opens the filter
 //                            and makes the tone rounder (no knob; nothing happens with nothing patched in)
 #include "daisy_versio.h"
@@ -63,8 +64,15 @@ static bool     gTapDown  = false;
 static uint32_t gTapStart = 0;
 static uint32_t gSeedCtr  = 1;
 
-// Gate
-static bool gGatePrev = false;
+// Clock in (the Tap jack). Pulses set the tempo and the Rate knob becomes a multiplier of the clock period. With no
+// clock, or once it has stopped for a couple of seconds, Rate is the free knob in seconds. Pulses do not play notes.
+static bool     gGatePrev  = false;
+static bool     gClkHave   = false; // have we seen one pulse
+static bool     gClkActive = false; // have we seen two, so there is a period to follow
+static uint32_t gClkLast   = 0;     // time of the last pulse, ms
+static float    gClkPeriod = 0.f;   // seconds between pulses, lightly averaged
+static int      gClkIdx    = 5;     // step of the Rate knob while clocked
+static const float kClkRatio[13] = {0.25f, 0.5f, 1.f, 1.5f, 2.f, 3.f, 4.f, 6.f, 8.f, 12.f, 16.f, 24.f, 32.f};
 
 // Audio in steers the drones. No knob: when a signal is patched into In L or In R, its loudness swells the voices and
 // its brightness makes the tone rounder and opens the filter a little. The notes still come from the scale. With nothing
@@ -80,6 +88,7 @@ static float       gInAmt = 0.f, gInLvl = 1.f, gInBri = 0.5f; // how present, ho
 static volatile float gLedPeak   = 0.f;
 static volatile float gLedFlash  = 0.f; // seed flash, decays
 static volatile float gLedGate   = 0.f;
+static volatile bool  gLedClock  = false; // a clock is patched in and being followed
 static volatile bool  gLedFrozen = false;
 static volatile int   gLedScale  = 4;
 static volatile float gLedAct    = 0.f;
@@ -97,6 +106,48 @@ static int Step(float pos, int n, int cur)
         return cur;
     int i = (int)f;
     return i < 0 ? 0 : (i > n - 1 ? n - 1 : i);
+}
+
+// A pulse arrived on the Tap jack at time `now` (ms). Works out the period since the last one.
+static void ClockEdge(uint32_t now)
+{
+    if(gClkHave)
+    {
+        const float dt = (float)(now - gClkLast) * 0.001f;
+        if(dt < 0.01f)
+            return; // ringing or a glitch: ignore this pulse completely
+        if(dt <= 12.f)
+        {
+            if(gClkPeriod > 0.f && dt > 0.6f * gClkPeriod && dt < 1.6f * gClkPeriod)
+                gClkPeriod += 0.4f * (dt - gClkPeriod); // steady clock: average out the jitter
+            else
+                gClkPeriod = dt; // a new tempo: jump straight to it
+            gClkActive = true;
+        }
+        else
+        {
+            gClkPeriod = 0.f; // too slow to be a clock: start again
+            gClkActive = false;
+        }
+    }
+    gClkLast = now;
+    gClkHave = true;
+}
+
+// Called every block: if the pulses have stopped for 2.5 periods (at least 2 s), go back to the free Rate knob.
+static void ClockTimeout(uint32_t now)
+{
+    if(gClkHave)
+    {
+        const float since = (float)(now - gClkLast) * 0.001f;
+        const float limit = gClkActive ? (2.5f * gClkPeriod > 2.f ? 2.5f * gClkPeriod : 2.f) : 12.f;
+        if(since > limit)
+        {
+            gClkHave   = false;
+            gClkActive = false;
+            gClkPeriod = 0.f;
+        }
+    }
 }
 
 // Listens to the audio inputs and keeps three slow numbers: gInAmt (is something patched in), gInLvl (how loud, relative
@@ -176,6 +227,8 @@ static void Audio(AudioHandle::InputBuffer  in,
         gScaleI = sc < 0 ? 0 : (sc > 7 ? 7 : sc);
         int vc  = (int)(gKnob[2] * 12.f);
         gVoices = (vc < 0 ? 0 : (vc > 11 ? 11 : vc)) + 1;
+        int cr  = (int)(gKnob[3] * 13.f);
+        gClkIdx = cr < 0 ? 0 : (cr > 12 ? 12 : cr);
     }
     gFade += (1.f - gFade) * 0.0005f; // about 2 seconds
 
@@ -211,14 +264,15 @@ static void Audio(AudioHandle::InputBuffer  in,
         }
     }
 
-    // ---- gate: each rising edge starts the next voice's note ----
+    // ---- clock: each rising edge on the Tap jack sets the tempo ----
     const bool g = hw.Gate();
     if(g && !gGatePrev)
     {
-        gEng.Advance();
         gLedGate = 1.f;
+        ClockEdge(now);
     }
     gGatePrev = g;
+    ClockTimeout(now);
 
     // ---- knobs. Every knob is live, there is nothing to pick up. ----
     {
@@ -236,8 +290,16 @@ static void Audio(AudioHandle::InputBuffer  in,
         // 3 Voices: one to twelve
         gVoices = Step(gKnob[2], 12, gVoices - 1) + 1;
         P.dens  = gVoices;
-        // 4 Rate: note length at the root, 0.12 s to 48 s (higher notes are longer)
-        P.rate = 0.12f * powf(400.f, gKnob[3]);
+        // 4 Rate: note length at the root. Free: 0.12 s to 48 s (higher notes are longer). With a clock patched in
+        // it becomes the clock period times a step from 1/4 to 32, so the notes keep time with the clock.
+        gClkIdx = Step(gKnob[3], 13, gClkIdx);
+        if(gClkActive)
+        {
+            float r = gClkPeriod * kClkRatio[gClkIdx];
+            P.rate  = r < 0.05f ? 0.05f : (r > 120.f ? 120.f : r);
+        }
+        else
+            P.rate = 0.12f * powf(400.f, gKnob[3]);
         // 5 Glide: 0.01 s to 12 s
         P.glide = 0.01f * powf(1200.f, gKnob[4]);
         // 6 Spread: pitch range above the root, root only to three octaves
@@ -308,6 +370,7 @@ static void Audio(AudioHandle::InputBuffer  in,
     }
     gLedPeak   = gLedPeak * 0.92f > peak ? gLedPeak * 0.92f : peak;
     gLedFrozen = gEng.Frozen();
+    gLedClock  = gClkActive;
     gLedScale  = gScaleI;
     gLedAct    = gEng.Activity();
     gLedIn     = kInAmount * gInAmt * (0.2f + 0.8f * gInLvl);
@@ -356,7 +419,9 @@ int main(void)
             r += 0.12f * in;
             b += 0.35f * in;
         }
-        gr += gLedGate * 0.8f;                              // green flash on a gate
+        gr += gLedGate * 0.8f;                              // green flash on each clock pulse
+        if(gLedClock)                                       // faint green while a clock is being followed
+            gr += 0.04f;
         if(gLedFrozen)                                      // slow amber pulse while Locked
         {
             r += 0.5f * phase;
