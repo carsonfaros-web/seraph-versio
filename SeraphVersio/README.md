@@ -54,7 +54,17 @@ I assumed left is the first label printed beside each switch. That is not confir
 
 **Gate input (Tap jack).** Each rising edge starts the next voice's note, going round the voices in turn. Use a clock or sequencer to play the notes. Locked, it just retriggers them.
 
-**Audio inputs.** Not used in this version. The old input mix was part of Setup, which is gone.
+**Audio inputs (In L and In R).** Patch any sound in and it steers the drones. There is no knob and nothing to set.
+
+- Its **loudness** swells the voices: the quietest part of the input brings the drones down to about 30% of their level (about -10 dB), the loudest part leaves them at full level. Loudness is measured against the input's own recent peak, so a quiet source and a hot one steer the same.
+- Its **brightness** opens the filter and moves the tone toward saw: a dark source (kick, bass) darkens the drones, a bright one (hi-hats, noise, cymbals) brightens them.
+- The notes still come from the scale. The input never changes the pitches.
+- It switches itself on when the input is louder than about -48 dBFS, fades in over about 0.3 s, and fades out about 2.5 s after the signal has gone for 1.5 s. With nothing patched in, or only a noise floor, the sound is identical to before (checked bit for bit).
+- LED 4 glows violet while the input is steering, brighter with the input level.
+
+To turn it off, set `kInAmount` to 0 in `main.cpp`. The effect is most obvious with Wave in the middle or on the right; with Wave fully left (pure sines) the main effect is the swell.
+
+The audio engine's old input mix is still in the code (`P.inLevel`) but the panel keeps it at 0, so the input is never mixed into the sound itself.
 
 Fixed in the firmware: drift 0.5, wow 0.05, damping 0.4, full stereo width, every voice hard left or right, and the strike effect on. The Space switch sets reverb amount, size and decay together. The Room position is nearly dry on purpose: the reverb spreads each note to both sides, which blurs the hard panning.
 
@@ -90,11 +100,13 @@ Verified on a computer:
 - `seraph.h` compiles with no warnings under `g++ -Wall -Wextra`, renders without NaNs, and was tested with AddressSanitizer and UBSan.
 - A scripted run of the control logic in `main.cpp` (41 checks): every knob's range, all eight scales and six voice counts selectable, no flutter on step edges, switch mapping, tap short and hold, gate, and 3 minutes of random knob, switch, tap and gate input.
 - Note behaviour (16 checks): Rate speeds up notes within a second, Spread 0 is root only and Spread 1 reaches three octaves, Lock repeats pitch and length, scale changes apply at once while locked, the same seed gives the same pattern, length follows pitch, the pattern does not fall into a short loop, removed voices fade in about a second.
+- Audio input (host tests with a kick, hi-hats, bass, noise swell, sines, a noise floor, NaN, infinity, 1e30 values, DC and full-scale noise): with a silent input the output is bit-identical to the version without input steering, a noise floor never switches it on, a hot and a quiet input steer the same, kick and bass read dark and hats and noise read bright, it releases about 10 s after the input stops, and nothing produced NaN or tripped the sanitizers. The browser simulator matches the C++ within 0.3 dB.
 - Level: the Wave knob stays within about 1 dB across its range, and the worst case over every switch, rate, spread and root combination stays below the limiter ceiling, with the output trim at 0.5.
 - Sound: with Wave fully left a single voice has harmonics at least 69 dB below the note, each voice can sit entirely on one side, notes start bright and ring down to a sine, and with 12 voices at Rate about 46% there are about 6 notes sounding at once and 3 new notes a second, like the recording. I measured the recording; I cannot hear it, so whether it feels the same is for your ears.
 - The cloud build compiles against the real libDaisy.
 
 Not verified, because nobody has flashed it yet:
+- Audio input steering on the real module: the input level scaling, how quiet a signal still switches it on (`kInGate`), and whether the inputs are quiet enough with nothing patched in.
 - How it sounds and feels on a real Versio.
 - Whether the audio callback fits in the CPU budget. Set `SERAPH_CPU_METER` to 1 in `main.cpp` to show CPU load on LED 4 (green is low, red is high).
 - The three-way switch directions, which knob is "knob 1", and whether the Tap jack reads as a gate.

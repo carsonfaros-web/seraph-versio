@@ -18,12 +18,14 @@ Drone and ambient firmware for a Noise Engineering Yester Versio (Daisy Seed ins
 - Note logic: when a note ends, next pitch comes from the last note's length, next length from the new pitch (sqrt of pitch ratio). Same seed, same pattern. Rate is applied as a phase speed, so it works mid-note.
 - LEDs: 1 level, 2 note activity, 3 scale colour, 4 events (white new seed, green gate, amber pulse while Locked).
 - Engine is now 12 voices x 2 copies (was 6 x 4), every voice hard left or right, and each note starts at the Wave timbre and rings down to a pure sine ("strike"). This came from measuring the Helical "First play 1" mp3 (pure sines, instant attack, cubic-ish decay to silence, ~6 notes sounding, 2.8 notes/s, hard-panned, E major E2 to E5). Knob positions that approximate it are in the README.
-- Removed on purpose: Setup pages, pick-up, audio input mix, cluster/drift/wow/tune/width/level knobs (fixed at album values).
+- Audio in (In L/R) steers the drones, no knob: loudness (relative to the input's own peak) swells the voices down to 30%, brightness (share above ~800 Hz) opens the filter by up to +/-0.25 and moves timbre by up to +/-0.3 toward saw. Auto-engages above 0.004 peak (kInGate), holds 1.5 s, off in ~2.5 s. LED 4 glows violet. Code: InputAnalysis() and the block after the fixed values in main.cpp; kInAmount = 0 turns it off. Silent input = bit-identical to before.
+- Removed on purpose: Setup pages, pick-up, audio input mix into the sound (P.inLevel stays 0), cluster/drift/wow/tune/width/level knobs (fixed at album values).
 
 ## Tested
 PC build with ASan and UBSan: a scripted simulation of the Versio control logic (41 checks), note behaviour (16 checks: rate reacts at once, spread range, lock, scale change while locked, determinism, length follows pitch, no short loops, voices fade), loudness across the Wave knob (within ~1 dB), worst-case peak below the limiter, random and extreme settings, out-of-range values, 30-minute runs, sample rates 32 to 192 kHz, block sizes 1 to 1024, and 3 minutes of random knob, switch, tap and gate input. The cloud build compiles against the real libDaisy.
 
 ## Not verified
+- Audio-input steering on hardware: input scaling vs kInGate, noise floor with nothing patched in.
 - How the firmware sounds and behaves on a real Versio. Nobody has flashed the Helical-style build yet.
 - Versio DFU entry method (check Noise Engineering's manual), real output voltage scaling, CPU load (`SERAPH_CPU_METER` 1 shows it on LED 4), which physical knob is "knob 1", switch directions, and whether the Tap jack reads as a gate.
 - Flash with https://flash.daisy.audio/ (Chrome, File Upload tab). Power the case off and unplug the ribbon before connecting USB.

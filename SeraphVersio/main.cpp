@@ -10,6 +10,8 @@
 //   Tap, short:              new seed (every voice starts a new note, new pattern)
 //   Tap, hold 0.8 s or more: Lock on or off (notes and lengths repeat, scale and spread still work)
 //   Gate in (Tap jack):      each rising edge starts the next voice's note, so a clock can play it
+//   Audio in (L/R):          patch any sound in and its loudness swells the drones, its brightness opens the filter
+//                            and moves the tone toward saw (no knob; nothing happens with nothing patched in)
 #include "daisy_versio.h"
 #include "seraph.h"
 #include <cmath>
@@ -64,6 +66,16 @@ static uint32_t gSeedCtr  = 1;
 // Gate
 static bool gGatePrev = false;
 
+// Audio in steers the drones. No knob: when a signal is patched into In L or In R, its loudness swells the voices and
+// its brightness opens the filter and pushes the tone toward saw. The notes still come from the scale. With nothing
+// patched in, none of this has any effect. Set kInAmount to 0 to turn it off.
+static const float kInAmount = 1.f;
+static const float kInGate   = 0.004f; // peak level (about -48 dBFS) below which nothing counts as patched in
+static float       gInEnv = 0.f, gInLp = 0.f, gInAbs = 0.f, gInHi = 0.f; // followers on the input
+static float       gInPeak = 0.f; // slow maximum of the level, so a quiet or a hot input steers equally well
+static int         gInHold = 0;   // blocks left before we decide the input has gone away
+static float       gInAmt = 0.f, gInLvl = 1.f, gInBri = 0.5f; // how present, how loud, how bright (all 0..1)
+
 // Values the main loop reads for the LEDs
 static volatile float gLedPeak   = 0.f;
 static volatile float gLedFlash  = 0.f; // seed flash, decays
@@ -71,6 +83,7 @@ static volatile float gLedGate   = 0.f;
 static volatile bool  gLedFrozen = false;
 static volatile int   gLedScale  = 4;
 static volatile float gLedAct    = 0.f;
+static volatile float gLedIn     = 0.f; // how strongly the audio input is steering the drones
 #if SERAPH_CPU_METER
 static volatile float gLedCpu = 0.f;
 #endif
@@ -86,6 +99,47 @@ static int Step(float pos, int n, int cur)
     return i < 0 ? 0 : (i > n - 1 ? n - 1 : i);
 }
 
+// Listens to the audio inputs and keeps three slow numbers: gInAmt (is something patched in), gInLvl (how loud, relative
+// to its own recent peak) and gInBri (how bright: the share of the sound above about 800 Hz). Called once per block.
+static void InputAnalysis(const float* a, const float* b, size_t size)
+{
+    for(size_t i = 0; i < size; i++)
+    {
+        const float x  = 0.5f * (a[i] + b[i]);
+        const float ax = fabsf(x);
+        gInEnv += (ax > gInEnv ? 0.05f : 0.0003f) * (ax - gInEnv); // quick up, about 70 ms down
+        gInLp += 0.1f * (x - gInLp);                               // one-pole low-pass near 800 Hz
+        gInAbs += 0.0005f * (ax - gInAbs);
+        gInHi += 0.0005f * (fabsf(x - gInLp) - gInHi);              // what is left above it
+    }
+    if(!(gInEnv == gInEnv) || !(gInLp == gInLp) || !(gInAbs == gInAbs) || !(gInHi == gInHi))
+    {
+        gInEnv = gInLp = gInAbs = gInHi = 0.f; // NaN or garbage on the input: start again
+        gInPeak                         = 0.f;
+    }
+    const bool heard = gInEnv > kInGate;
+    if(heard)
+        gInHold = 1500; // about 1.5 s of memory, so sparse hits do not make it flutter
+    else if(gInHold > 0)
+        gInHold--;
+    const float present = gInHold > 0 ? 1.f : 0.f;
+    gInAmt += (present > gInAmt ? 0.003f : 0.0004f) * (present - gInAmt); // in about 0.3 s, out about 2.5 s
+    gInPeak = gInEnv > gInPeak * 0.9999f ? gInEnv : gInPeak * 0.9999f;      // forgets over about 10 s
+    if(heard)
+    {
+        const float top = gInPeak > 0.02f ? gInPeak : 0.02f;
+        float       lvl = gInEnv / top;
+        lvl             = lvl > 1.f ? 1.f : lvl;
+        gInLvl += 0.002f * (lvl - gInLvl); // about 0.5 s, so the drones swell rather than flutter
+        if(gInAbs > 1e-5f)
+        {
+            float br = (gInHi / gInAbs - 0.15f) / 0.7f; // low sine is near 0.2, noise near 1
+            br       = br < 0.f ? 0.f : (br > 1.f ? 1.f : br);
+            gInBri += 0.0015f * (br - gInBri);
+        }
+    }
+}
+
 static void Audio(AudioHandle::InputBuffer  in,
                   AudioHandle::OutputBuffer out,
                   size_t                    size)
@@ -98,6 +152,7 @@ static void Audio(AudioHandle::InputBuffer  in,
     // block, and its edges checked right after, or it never registers.
     hw.tap.Debounce();
     const uint32_t now = System::GetNow();
+    InputAnalysis(in[0], in[1], size);
 
     // ---- knobs, lightly smoothed against ADC and CV noise (about 10 ms) ----
     for(int i = 0; i < 7; i++)
@@ -218,6 +273,13 @@ static void Audio(AudioHandle::InputBuffer  in,
     P.strike = 1.f;  // each note starts at the Wave timbre and rings down to a pure sine
     P.level  = 0.7f;
     P.inLevel = 0.f;
+    // audio in steers the drones: louder swells them, brighter opens the filter and moves the tone toward saw
+    {
+        const float a = kInAmount * gInAmt;
+        P.gain *= 1.f - a * (1.f - (0.3f + 0.7f * gInLvl));
+        P.dark += a * (gInBri - 0.5f) * 0.5f;
+        P.timbre += a * (gInBri - 0.5f) * 0.6f;
+    }
 
     // ---- audio ----
     float inL[256], inR[256], oL[256], oR[256];
@@ -246,6 +308,7 @@ static void Audio(AudioHandle::InputBuffer  in,
     gLedFrozen = gEng.Frozen();
     gLedScale  = gScaleI;
     gLedAct    = gEng.Activity();
+    gLedIn     = kInAmount * gInAmt * (0.2f + 0.8f * gInLvl);
 #if SERAPH_CPU_METER
     gMeter.OnBlockEnd();
     gLedCpu = gMeter.GetAvgCpuLoad();
@@ -286,6 +349,11 @@ int main(void)
         const int sc = gLedScale < 0 ? 0 : (gLedScale > 7 ? 7 : gLedScale);
         hw.SetLed(DaisyVersio::LED_2, kScaleCol[sc][0], kScaleCol[sc][1], kScaleCol[sc][2]);
         float r = gLedFlash, gr = gLedFlash, b = gLedFlash; // white flash on a new seed
+        {
+            const float in = gLedIn; // steady violet glow while the audio input is steering, brighter with the level
+            r += 0.12f * in;
+            b += 0.35f * in;
+        }
         gr += gLedGate * 0.8f;                              // green flash on a gate
         if(gLedFrozen)                                      // slow amber pulse while Locked
         {
