@@ -1,15 +1,18 @@
 # Seraph for Noise Engineering Versio: handoff
 
-State as of 2026-11-21. Use this to continue in a new chat.
+State as of 2026-11-22. Use this to continue in a new chat.
 
 ## What it is
-Drone and ambient firmware for a Noise Engineering Yester Versio (Daisy Seed inside), built from measurements of *Seraphim* by How To Disappear Completely. Six voices of four detuned copies, a dark low-pass, a sub sine, and an eight-line reverb. Since 2026-11-21 the panel and note logic copy the Sdkc Instruments Helical, because the earlier scheme "did not feel intuitive" and "took too long to react".
+Drone and ambient firmware for a Noise Engineering Yester Versio (Daisy Seed inside), built from measurements of *Seraphim* by How To Disappear Completely. Twelve voices of two detuned copies, a dark low-pass, a sub sine, and an eight-line reverb. Since 2026-11-21 the panel and note logic copy the Sdkc Instruments Helical, because the earlier scheme "did not feel intuitive" and "took too long to react".
 
 ## Where things are
 - Repo: https://github.com/carsonfaros-web/seraph-versio (public). `main` holds the firmware in `SeraphVersio/` (`main.cpp`, `seraph.h`, `Makefile`, `README.md`).
 - Every push to `main` builds in GitHub Actions and replaces the release "latest" with `Seraph.bin`: https://github.com/carsonfaros-web/seraph-versio/releases/tag/latest
 - Branch `timbre-experiment` holds parked work (Warp, Shift, Fold). It predates the Helical redesign and would need rework to merge.
 - Faceplate guide: https://claude.ai/artifact/9jmgdG25f1zfGQgWac8J8i
+- Browser simulator (JS port of the firmware, with test inputs and file input): https://claude.ai/artifact/Qv25mmCeNqTAQwkCEPuZYb
+- Code walkthrough for learning (section by section): https://claude.ai/artifact/GRMrGomjkgjgDw4giVC9de
+- Old manual doc https://claude.ai/artifact/KQTdxg8uDKuA618fGqri6H still describes the removed Setup pages: outdated.
 
 ## Controls (current main, Helical-style, one flat panel, no Setup pages)
 - Knobs, all live and all take CV: 1 Root, 2 Scale (8 scales, dark to bright; major replaced major pentatonic), 3 Voices (1 to 12), 4 Rate (note length 0.12 to 48 s), 5 Glide (0.01 to 12 s), 6 Spread (root only to three octaves), 7 Wave (left = clean struck sine like the Helical recording, right = saw drone with wider detune, sub and noise; loudness levelled).
@@ -22,7 +25,7 @@ Drone and ambient firmware for a Noise Engineering Yester Versio (Daisy Seed ins
 - Removed on purpose: Setup pages, pick-up, audio input mix into the sound (P.inLevel stays 0), cluster/drift/wow/tune/width/level knobs (fixed at album values).
 
 ## Tested
-PC build with ASan and UBSan: a scripted simulation of the Versio control logic (41 checks), note behaviour (16 checks: rate reacts at once, spread range, lock, scale change while locked, determinism, length follows pitch, no short loops, voices fade), loudness across the Wave knob (within ~1 dB), worst-case peak below the limiter, random and extreme settings, out-of-range values, 30-minute runs, sample rates 32 to 192 kHz, block sizes 1 to 1024, and 3 minutes of random knob, switch, tap and gate input. The cloud build compiles against the real libDaisy.
+PC build with ASan and UBSan: a scripted simulation of the Versio control logic (41 checks), note behaviour (16 checks: rate reacts at once, spread range, lock, scale change while locked, determinism, length follows pitch, no short loops, voices fade), loudness across the Wave knob (within ~1 dB), worst-case peak below the limiter, audio-input steering (silent input is bit-identical to before, noise floor ignored, NaN/inf/1e30/DC input safe, browser port within 0.3 dB of C++), random and extreme settings, out-of-range values, 30-minute runs, sample rates 32 to 192 kHz, block sizes 1 to 1024, and 3 minutes of random knob, switch, tap and gate input. The cloud build compiles against the real libDaisy.
 
 ## Not verified
 - Audio-input steering on hardware: input scaling vs kInGate, noise floor with nothing patched in.
